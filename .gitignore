@@ -1,0 +1,18 @@
+# Python
+__pycache__/
+*.py[cod]
+.venv/
+*.egg-info/
+
+# Tooling caches
+.pytest_cache/
+.ruff_cache/
+
+# Secrets — never commit API keys (subject VI.3)
+.env
+.env.*
+!.env.example
+
+# Generated outputs — not part of the submission (subject VIII)
+cache/
+evaluations/
