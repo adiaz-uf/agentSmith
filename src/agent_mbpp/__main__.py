@@ -33,7 +33,11 @@ def parse_args(argv: Sequence[str] | None = None) -> argparse.Namespace:
 def main(argv: Sequence[str] | None = None) -> int:
     """Run the MBPP agent on a single task."""
     args = parse_args(argv)
-    load_env(args.env_file)
+    try:
+        load_env(args.env_file)
+    except (FileNotFoundError, ValueError) as exc:
+        print(f"agent_mbpp: {exc}", file=sys.stderr)
+        return 1
     print("agent_mbpp: not implemented yet", file=sys.stderr)
     return 1
 

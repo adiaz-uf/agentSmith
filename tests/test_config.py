@@ -37,13 +37,16 @@ class TestEnvLoading:
         monkeypatch.delenv("TEST_API_KEY", raising=False)
         monkeypatch.delenv("ANOTHER_VAR", raising=False)
 
-        loaded = load_env(test_env_file)
+        loaded = load_env(test_env_file, override=True)
         assert loaded is True
         assert os.environ.get("TEST_API_KEY") == "secret_12345"
         assert os.environ.get("ANOTHER_VAR") == "hello"
 
-    def test_load_env_default_when_none(self, monkeypatch):
-        # Even without .env, should return a bool and not raise error
+    def test_load_env_default_when_none(self):
+        # load_env(None) auto-discovers .env at the project root via
+        # __file__-based resolution.  With override=False (the default)
+        # it never overwrites existing env vars, so this is safe to call
+        # even when a real .env exists on the developer's machine.
         result = load_env(None)
         assert isinstance(result, bool)
 
@@ -188,6 +191,72 @@ class TestCliEnvFileParsing:
         assert args.config_file == "sandbox_template.json"
         assert args.env_file == ".env.local"
         assert args.mcp_stdio == "python tools.py"
+
+
+class TestEntrypointErrorHandling:
+    """Fix #6: Entrypoints should catch config errors gracefully."""
+
+    def test_agent_mbpp_bad_env_file(self, capsys):
+        from agent_mbpp.__main__ import main as mbpp_main
+        exit_code = mbpp_main(["--env-file", "/nonexistent/.env"])
+        assert exit_code == 1
+        captured = capsys.readouterr()
+        assert "Environment file not found" in captured.err
+
+    def test_agent_swebench_bad_env_file(self, capsys):
+        from agent_swebench.__main__ import main as swebench_main
+        exit_code = swebench_main(["--env-file", "/nonexistent/.env"])
+        assert exit_code == 1
+        captured = capsys.readouterr()
+        assert "Environment file not found" in captured.err
+
+    def test_sandbox_bad_env_file(self, capsys):
+        from agent_smith.sandbox.cli import main as sandbox_main
+        exit_code = sandbox_main(["--env-file", "/nonexistent/.env"])
+        assert exit_code == 1
+        captured = capsys.readouterr()
+        assert "Environment file not found" in captured.err
+
+    def test_sandbox_bad_config_file(self, capsys):
+        from agent_smith.sandbox.cli import main as sandbox_main
+        exit_code = sandbox_main(["/nonexistent/config.json"])
+        assert exit_code == 1
+        captured = capsys.readouterr()
+        assert "Sandbox configuration file not found" in captured.err
+
+
+class TestSandboxConfigValidation:
+    """Tests for SandboxConfig strict validation (PR review fixes)."""
+
+    def test_sandbox_config_rejects_extra_fields(self):
+        """Fix #5: Unknown keys should be rejected, not silently dropped."""
+        with pytest.raises(ValidationError, match="extra"):
+            SandboxConfig(max_memory_mb=512, typo_field="ignored")
+
+    def test_model_config_rejects_extra_fields(self):
+        """ModelConfig should also reject unknown keys."""
+        with pytest.raises(ValidationError, match="extra"):
+            ModelConfig(model_name="test", typo_field="ignored")
+
+    def test_sandbox_config_rejects_zero_execution_time(self):
+        """Fix #4: max_execution_time_seconds must be > 0."""
+        with pytest.raises(ValidationError):
+            SandboxConfig(max_execution_time_seconds=0)
+
+    def test_sandbox_config_rejects_negative_execution_time(self):
+        """Fix #4: max_execution_time_seconds must be > 0."""
+        with pytest.raises(ValidationError):
+            SandboxConfig(max_execution_time_seconds=-5)
+
+    def test_sandbox_config_rejects_zero_memory(self):
+        """Fix #4: max_memory_mb must be > 0."""
+        with pytest.raises(ValidationError):
+            SandboxConfig(max_memory_mb=0)
+
+    def test_sandbox_config_rejects_negative_memory(self):
+        """Fix #4: max_memory_mb must be > 0."""
+        with pytest.raises(ValidationError):
+            SandboxConfig(max_memory_mb=-128)
 
 
 class TestSecurityHygiene:

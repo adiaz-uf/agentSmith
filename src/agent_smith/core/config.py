@@ -11,8 +11,8 @@ from __future__ import annotations
 import os
 from pathlib import Path
 
-from dotenv import find_dotenv, load_dotenv
-from pydantic import BaseModel, Field
+from dotenv import load_dotenv
+from pydantic import BaseModel, ConfigDict, Field
 
 # -----------------------------------------------------------------------------
 # NOTE / TODO:
@@ -62,6 +62,8 @@ class SandboxConfig(BaseModel):
     Matches the moulinette evaluation schema and defaults.
     """
 
+    model_config = ConfigDict(extra="forbid")
+
     authorized_imports: list[str] = Field(
         default_factory=lambda: list(DEFAULT_AUTHORIZED_IMPORTS),
         description="List of allowed import names (e.g., ['math', 'json']). Glob patterns supported.",
@@ -72,10 +74,12 @@ class SandboxConfig(BaseModel):
     )
     max_execution_time_seconds: int = Field(
         default=30,
+        gt=0,
         description="Maximum wall-clock time in seconds for a single sandbox execution.",
     )
     max_memory_mb: int = Field(
         default=512,
+        gt=0,
         description="Maximum memory in megabytes for sandbox execution.",
     )
 
@@ -95,6 +99,8 @@ class SandboxConfig(BaseModel):
 
 class ModelConfig(BaseModel):
     """Configuration for an LLM model and API provider endpoint."""
+
+    model_config = ConfigDict(extra="forbid")
 
     model_name: str = Field(
         ...,
@@ -135,13 +141,13 @@ class ModelConfig(BaseModel):
             return cls.model_validate_json(f.read())
 
 
-def load_env(env_file: Path | str | None = None, override: bool = True) -> bool:
+def load_env(env_file: Path | str | None = None, override: bool = False) -> bool:
     """Load environment variables from a .env file.
 
     Args:
         env_file: Specific path to a .env file (e.g. from --env-file).
                   If None, attempts to find and load a .env file automatically.
-        override: Whether to override existing environment variables (default: True).
+        override: Whether to override existing environment variables (default: False).
 
     Returns:
         True if an environment file was found and loaded, False otherwise.
@@ -155,9 +161,17 @@ def load_env(env_file: Path | str | None = None, override: bool = True) -> bool:
             raise FileNotFoundError(f"Environment file not found: {env_file}")
         return load_dotenv(dotenv_path=path, override=override)
 
-    dotenv_path = find_dotenv(usecwd=True)
-    if dotenv_path:
-        return load_dotenv(dotenv_path=dotenv_path, override=override)
+    # Restrict auto-discovery to the project root instead of walking
+    # up the directory tree, so we never accidentally load a .env
+    # from an unrelated parent directory.
+    # NOTE: This assumes an editable (src-layout) install where __file__
+    # is ``<root>/src/agent_smith/core/config.py``.  In a non-editable
+    # install the path would differ and auto-discovery would silently
+    # return False (safe default).
+    project_root = Path(__file__).resolve().parent.parent.parent.parent
+    candidate = project_root / ".env"
+    if candidate.is_file():
+        return load_dotenv(dotenv_path=candidate, override=override)
     return False
 
 

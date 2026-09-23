@@ -15,6 +15,8 @@ import argparse
 import sys
 from collections.abc import Sequence
 
+from pydantic import ValidationError
+
 from agent_smith.core.config import load_env, load_sandbox_config
 
 
@@ -50,9 +52,17 @@ def parse_args(argv: Sequence[str] | None = None) -> argparse.Namespace:
 def main(argv: Sequence[str] | None = None) -> int:
     """Launch the interactive sandbox REPL."""
     args = parse_args(argv)
-    load_env(args.env_file)
-    if args.config_file:
-        load_sandbox_config(args.config_file)
+    try:
+        load_env(args.env_file)
+    except (FileNotFoundError, ValueError) as exc:
+        print(f"sandbox: {exc}", file=sys.stderr)
+        return 1
+    try:
+        if args.config_file:
+            load_sandbox_config(args.config_file)
+    except (FileNotFoundError, ValidationError) as exc:
+        print(f"sandbox: {exc}", file=sys.stderr)
+        return 1
     print("sandbox: not implemented yet", file=sys.stderr)
     return 1
 
