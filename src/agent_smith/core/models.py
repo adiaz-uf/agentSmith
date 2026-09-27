@@ -13,9 +13,9 @@ import os
 import tempfile
 from datetime import datetime, timezone
 from pathlib import Path
-from typing import Literal
+from typing import Any, Literal
 
-from pydantic import BaseModel, ConfigDict, Field
+from pydantic import BaseModel, ConfigDict, Field, field_validator
 
 # Defaults for SandboxConfig
 DEFAULT_AUTHORIZED_IMPORTS: list[str] = [
@@ -52,6 +52,17 @@ def current_iso_timestamp() -> str:
     return datetime.now(timezone.utc).isoformat()
 
 
+def validate_iso_8601_timestamp(v: str) -> str:
+    """Validate that a string conforms to the ISO 8601 format."""
+    if not isinstance(v, str) or not v.strip():
+        raise ValueError("timestamp must be a non-empty ISO 8601 string")
+    try:
+        datetime.fromisoformat(v.replace("Z", "+00:00"))
+    except Exception as exc:
+        raise ValueError(f"Invalid ISO 8601 timestamp: '{v}'") from exc
+    return v
+
+
 # -----------------------------------------------------------------------------
 # StepMetrics
 # -----------------------------------------------------------------------------
@@ -82,6 +93,11 @@ class StepMetrics(BaseModel):
         ge=0,
         description="Number of retries triggered for this step (due to rate limits, timeouts, etc.).",
     )
+
+    @field_validator("timestamp")
+    @classmethod
+    def _validate_timestamp(cls, v: str) -> str:
+        return validate_iso_8601_timestamp(v)
 
 
 # -----------------------------------------------------------------------------
@@ -132,6 +148,23 @@ class SolutionOutput(BaseModel):
         default_factory=current_iso_timestamp,
         description="ISO 8601 timestamp when this solution was finalized.",
     )
+
+    @field_validator("task_id", mode="before")
+    @classmethod
+    def _normalize_task_id(cls, v: Any) -> str:
+        if isinstance(v, bool):
+            raise ValueError("task_id cannot be a boolean")  # noqa: TRY004
+        if isinstance(v, (int, str)):
+            s = str(v).strip()
+            if not s:
+                raise ValueError("task_id cannot be empty")
+            return s
+        raise ValueError(f"task_id must be a string or integer, got {type(v).__name__}")
+
+    @field_validator("timestamp")
+    @classmethod
+    def _validate_timestamp(cls, v: str) -> str:
+        return validate_iso_8601_timestamp(v)
 
     def write_to_file(self, path: Path | str, indent: int = 2) -> Path:
         """Write this SolutionOutput atomically to a JSON file."""

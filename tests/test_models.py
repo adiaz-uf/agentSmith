@@ -74,12 +74,33 @@ class TestStepMetrics:
 
     def test_step_metrics_rejects_extra_fields(self):
         with pytest.raises(ValidationError, match="extra"):
+            StepMetrics.model_validate(
+                {
+                    "step": 1,
+                    "input_tokens": 10,
+                    "output_tokens": 10,
+                    "request_time_ms": 10.0,
+                    "unknown_field": "invalid",
+                }
+            )
+
+    def test_step_metrics_timestamp_validation(self):
+        step = StepMetrics(
+            step=1,
+            input_tokens=10,
+            output_tokens=10,
+            request_time_ms=10.0,
+            timestamp="2026-09-27T18:00:00Z",
+        )
+        assert step.timestamp == "2026-09-27T18:00:00Z"
+
+        with pytest.raises(ValidationError, match="timestamp"):
             StepMetrics(
                 step=1,
                 input_tokens=10,
                 output_tokens=10,
                 request_time_ms=10.0,
-                unknown_field="invalid",
+                timestamp="yesterday",
             )
 
 
@@ -144,6 +165,61 @@ class TestSolutionOutput:
 
     def test_solution_output_rejects_extra_fields(self):
         with pytest.raises(ValidationError, match="extra"):
+            SolutionOutput.model_validate(
+                {
+                    "task_id": "1",
+                    "benchmark": "mbpp",
+                    "success": True,
+                    "iterations": 0,
+                    "total_requests": 0,
+                    "total_input_tokens": 0,
+                    "total_output_tokens": 0,
+                    "total_time_seconds": 0.0,
+                    "foo": "bar",
+                }
+            )
+
+    def test_solution_output_coerces_int_task_id(self):
+        sol = SolutionOutput(
+            task_id=11,  # Numeric ID from MBPP
+            benchmark="mbpp",
+            success=True,
+            iterations=1,
+            total_requests=1,
+            total_input_tokens=10,
+            total_output_tokens=10,
+            total_time_seconds=1.0,
+        )
+        assert sol.task_id == "11"
+        assert isinstance(sol.task_id, str)
+
+    def test_solution_output_rejects_invalid_task_id(self):
+        with pytest.raises(ValidationError, match="task_id"):
+            SolutionOutput(
+                task_id=True,  # Booleans are rejected
+                benchmark="mbpp",
+                success=True,
+                iterations=0,
+                total_requests=0,
+                total_input_tokens=0,
+                total_output_tokens=0,
+                total_time_seconds=0.0,
+            )
+
+        with pytest.raises(ValidationError, match="task_id"):
+            SolutionOutput(
+                task_id="",  # Empty task_id is rejected
+                benchmark="mbpp",
+                success=True,
+                iterations=0,
+                total_requests=0,
+                total_input_tokens=0,
+                total_output_tokens=0,
+                total_time_seconds=0.0,
+            )
+
+    def test_solution_output_timestamp_validation(self):
+        with pytest.raises(ValidationError, match="timestamp"):
             SolutionOutput(
                 task_id="1",
                 benchmark="mbpp",
@@ -153,7 +229,7 @@ class TestSolutionOutput:
                 total_input_tokens=0,
                 total_output_tokens=0,
                 total_time_seconds=0.0,
-                foo="bar",
+                timestamp="invalid-timestamp",
             )
 
     def test_write_solution_json_atomic(self, tmp_path: Path):
@@ -336,3 +412,24 @@ class TestTaskInputLoaders:
 
         with pytest.raises(ValueError, match="Unknown benchmark"):
             load_task_input(mbpp_file, "unknown")
+
+    def test_mbpp_task_input_strict_rejects_boolean_id(self):
+        data = {
+            "task_id": True,
+            "task_definition": "desc",
+            "function_definition": "def foo():",
+            "test_list": ["assert foo() == 1"],
+        }
+        with pytest.raises(ValidationError):
+            MBPPTaskInput.model_validate(data)
+
+    def test_swebench_task_input_strict_rejects_numeric_id(self):
+        data = {
+            "instance_id": 12345,
+            "problem_statement": "statement",
+            "docker_image": "image:v1",
+            "eval_script": "./eval.sh",
+            "repo": "owner/repo",
+        }
+        with pytest.raises(ValidationError):
+            SWEBenchTaskInput.model_validate(data)
