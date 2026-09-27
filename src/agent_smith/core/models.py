@@ -260,7 +260,7 @@ class MBPPTaskInput(BaseModel):
 class SWEBenchTaskInput(BaseModel):
     """Input structure for a SWE-bench task loaded from --task-file JSON."""
 
-    model_config = ConfigDict(extra="forbid")
+    model_config = ConfigDict(extra="forbid", strict=True)
 
     instance_id: str = Field(
         ..., description="SWE-bench instance identifier (e.g. 'sympy__sympy-14711')."
