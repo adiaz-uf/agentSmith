@@ -235,7 +235,7 @@ class SandboxConfig(BaseModel):
 class MBPPTaskInput(BaseModel):
     """Input structure for an MBPP benchmark task loaded from --task-file JSON."""
 
-    model_config = ConfigDict(extra="forbid")
+    model_config = ConfigDict(extra="forbid", strict=True)
 
     task_id: int | str = Field(..., description="Unique MBPP task identifier (e.g. 11).")
     task_definition: str = Field(..., description="Natural language problem statement.")
