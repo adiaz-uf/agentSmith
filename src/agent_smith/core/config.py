@@ -14,87 +14,22 @@ from pathlib import Path
 from dotenv import load_dotenv
 from pydantic import BaseModel, ConfigDict, Field
 
-# -----------------------------------------------------------------------------
-# NOTE / TODO:
-# SandboxConfig and its default imports/directories are defined here temporarily
-# to make configuration loading (Issue #4) fully testable and autonomous in this
-# branch without prematurely moving or copying files from outside.
-#
-# Once Issue #3 (repository layout & models) is addressed and models_public.py is
-# officially placed in `agent_smith.core.models`, this class definition and its
-# defaults will be removed from here and imported directly from `agent_smith.core.models`
-# (e.g., `from agent_smith.core.models import SandboxConfig`) to maintain a single source
-# of truth.
-# -----------------------------------------------------------------------------
+from agent_smith.core.models import (
+    DEFAULT_ALLOWED_DIRECTORIES,
+    DEFAULT_AUTHORIZED_IMPORTS,
+    SandboxConfig,
+)
 
-DEFAULT_AUTHORIZED_IMPORTS = [
-    "math",
-    "math.*",
-    "collections",
-    "collections.*",
-    "itertools",
-    "re",
-    "json",
-    "typing",
-    "typing.*",
-    "functools",
-    "operator",
-    "heapq",
-    "bisect",
-    "copy",
-    "string",
-    "random",
-    "datetime",
-    "datetime.*",
-    "array",
-    "cmath",
+__all__ = [
+    "DEFAULT_ALLOWED_DIRECTORIES",
+    "DEFAULT_AUTHORIZED_IMPORTS",
+    "ModelConfig",
+    "SandboxConfig",
+    "get_api_key",
+    "load_env",
+    "load_model_config",
+    "load_sandbox_config",
 ]
-
-DEFAULT_ALLOWED_DIRECTORIES = [
-    "/testbed",
-    "/tmp/agent",
-]
-
-
-class SandboxConfig(BaseModel):
-    """Configuration for the secure code execution sandbox.
-
-    Matches the moulinette evaluation schema and defaults.
-    """
-
-    model_config = ConfigDict(extra="forbid")
-
-    authorized_imports: list[str] = Field(
-        default_factory=lambda: list(DEFAULT_AUTHORIZED_IMPORTS),
-        description="List of allowed import names (e.g., ['math', 'json']). Glob patterns supported.",
-    )
-    allowed_directories: list[str] = Field(
-        default_factory=lambda: list(DEFAULT_ALLOWED_DIRECTORIES),
-        description="List of filesystem paths the sandbox can access (e.g., ['/testbed', '/tmp/agent']).",
-    )
-    max_execution_time_seconds: int = Field(
-        default=30,
-        gt=0,
-        description="Maximum wall-clock time in seconds for a single sandbox execution.",
-    )
-    max_memory_mb: int = Field(
-        default=512,
-        gt=0,
-        description="Maximum memory in megabytes for sandbox execution.",
-    )
-
-    @classmethod
-    def from_file(cls, path: Path | str) -> SandboxConfig:
-        """Load and validate SandboxConfig from a JSON file."""
-        file_path = Path(path)
-        if not file_path.is_file():
-            raise FileNotFoundError(f"Sandbox configuration file not found: {path}")
-        with open(file_path, "r", encoding="utf-8") as f:
-            return cls.model_validate_json(f.read())
-
-    def to_json(self, indent: int = 2) -> str:
-        """Serialize configuration to a formatted JSON string."""
-        return self.model_dump_json(indent=indent)
 
 
 class ModelConfig(BaseModel):

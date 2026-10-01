@@ -157,13 +157,20 @@ class TestModelConfig:
 
 class TestCliEnvFileParsing:
     def test_agent_mbpp_args_parsing(self):
-        args = parse_mbpp_args([
-            "--task-file", "task.json",
-            "--output", "sol.json",
-            "--model-name", "my-model",
-            "--provider-url", "https://api.test",
-            "--env-file", "/custom/.env",
-        ])
+        args = parse_mbpp_args(
+            [
+                "--task-file",
+                "task.json",
+                "--output",
+                "sol.json",
+                "--model-name",
+                "my-model",
+                "--provider-url",
+                "https://api.test",
+                "--env-file",
+                "/custom/.env",
+            ]
+        )
         assert args.task_file == "task.json"
         assert args.output == "sol.json"
         assert args.model_name == "my-model"
@@ -171,33 +178,45 @@ class TestCliEnvFileParsing:
         assert args.env_file == "/custom/.env"
 
     def test_agent_swebench_args_parsing(self):
-        args = parse_swebench_args([
-            "--task-file", "task.json",
-            "--output", "sol.json",
-            "--model-name", "my-model",
-            "--provider-url", "https://api.test",
-            "--env-file", "/custom/.env",
-        ])
+        args = parse_swebench_args(
+            [
+                "--task-file",
+                "task.json",
+                "--output",
+                "sol.json",
+                "--model-name",
+                "my-model",
+                "--provider-url",
+                "https://api.test",
+                "--env-file",
+                "/custom/.env",
+            ]
+        )
         assert args.task_file == "task.json"
         assert args.output == "sol.json"
         assert args.env_file == "/custom/.env"
 
     def test_sandbox_args_parsing(self):
-        args = parse_sandbox_args([
-            "sandbox_template.json",
-            "--env-file", ".env.local",
-            "--mcp-stdio", "python tools.py",
-        ])
+        args = parse_sandbox_args(
+            [
+                "sandbox_template.json",
+                "--env-file",
+                ".env.local",
+                "--mcp-stdio",
+                "python tools.py",
+            ]
+        )
         assert args.config_file == "sandbox_template.json"
         assert args.env_file == ".env.local"
         assert args.mcp_stdio == "python tools.py"
 
 
 class TestEntrypointErrorHandling:
-    """Fix #6: Entrypoints should catch config errors gracefully."""
+    """Entrypoints should catch config errors gracefully."""
 
     def test_agent_mbpp_bad_env_file(self, capsys):
         from agent_mbpp.__main__ import main as mbpp_main
+
         exit_code = mbpp_main(["--env-file", "/nonexistent/.env"])
         assert exit_code == 1
         captured = capsys.readouterr()
@@ -205,6 +224,7 @@ class TestEntrypointErrorHandling:
 
     def test_agent_swebench_bad_env_file(self, capsys):
         from agent_swebench.__main__ import main as swebench_main
+
         exit_code = swebench_main(["--env-file", "/nonexistent/.env"])
         assert exit_code == 1
         captured = capsys.readouterr()
@@ -212,6 +232,7 @@ class TestEntrypointErrorHandling:
 
     def test_sandbox_bad_env_file(self, capsys):
         from agent_smith.sandbox.cli import main as sandbox_main
+
         exit_code = sandbox_main(["--env-file", "/nonexistent/.env"])
         assert exit_code == 1
         captured = capsys.readouterr()
@@ -219,6 +240,7 @@ class TestEntrypointErrorHandling:
 
     def test_sandbox_bad_config_file(self, capsys):
         from agent_smith.sandbox.cli import main as sandbox_main
+
         exit_code = sandbox_main(["/nonexistent/config.json"])
         assert exit_code == 1
         captured = capsys.readouterr()
@@ -226,10 +248,10 @@ class TestEntrypointErrorHandling:
 
 
 class TestSandboxConfigValidation:
-    """Tests for SandboxConfig strict validation (PR review fixes)."""
+    """Tests for SandboxConfig strict validation."""
 
     def test_sandbox_config_rejects_extra_fields(self):
-        """Fix #5: Unknown keys should be rejected, not silently dropped."""
+        """Unknown keys should be rejected, not silently dropped."""
         with pytest.raises(ValidationError, match="extra"):
             SandboxConfig(max_memory_mb=512, typo_field="ignored")
 
@@ -239,22 +261,22 @@ class TestSandboxConfigValidation:
             ModelConfig(model_name="test", typo_field="ignored")
 
     def test_sandbox_config_rejects_zero_execution_time(self):
-        """Fix #4: max_execution_time_seconds must be > 0."""
+        """max_execution_time_seconds must be > 0."""
         with pytest.raises(ValidationError):
             SandboxConfig(max_execution_time_seconds=0)
 
     def test_sandbox_config_rejects_negative_execution_time(self):
-        """Fix #4: max_execution_time_seconds must be > 0."""
+        """max_execution_time_seconds must be > 0."""
         with pytest.raises(ValidationError):
             SandboxConfig(max_execution_time_seconds=-5)
 
     def test_sandbox_config_rejects_zero_memory(self):
-        """Fix #4: max_memory_mb must be > 0."""
+        """max_memory_mb must be > 0."""
         with pytest.raises(ValidationError):
             SandboxConfig(max_memory_mb=0)
 
     def test_sandbox_config_rejects_negative_memory(self):
-        """Fix #4: max_memory_mb must be > 0."""
+        """max_memory_mb must be > 0."""
         with pytest.raises(ValidationError):
             SandboxConfig(max_memory_mb=-128)
 
