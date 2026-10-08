@@ -79,6 +79,8 @@ class OpenAICompatProvider(LLMProvider):
             raise LLMAPIError(
                 f"{self.api_url} returned HTTP {response.status_code}: {response.text[:500]}",
                 status_code=response.status_code,
+                headers=response.headers,
+                body=response.text,
             )
         try:
             data = response.json()

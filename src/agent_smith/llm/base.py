@@ -3,7 +3,7 @@
 from __future__ import annotations
 
 from abc import ABC, abstractmethod
-from collections.abc import Sequence
+from collections.abc import Mapping, Sequence
 from typing import Literal
 
 from pydantic import BaseModel, ConfigDict, Field
@@ -25,9 +25,19 @@ class LLMError(Exception):
 class LLMAPIError(LLMError):
     """The provider answered with an error status or an unusable payload."""
 
-    def __init__(self, message: str, status_code: int | None = None) -> None:
+    def __init__(
+        self,
+        message: str,
+        status_code: int | None = None,
+        *,
+        headers: Mapping[str, str] | None = None,
+        body: str = "",
+    ) -> None:
         super().__init__(message)
         self.status_code = status_code
+        # Kept so failover can read Retry-After and quota hints from the raw response.
+        self.headers: Mapping[str, str] = headers or {}
+        self.body = body
 
 
 class LLMConnectionError(LLMError):

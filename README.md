@@ -15,7 +15,7 @@ Unlike traditional LLM workflows that rely on static prompts or simple JSON tool
 - **Configurable Sandbox**: Strict execution boundary preventing privilege escalation, unauthorized imports, network access, or path escapes.
 - **Model Context Protocol (MCP)**: Clean tool abstraction over stdio/HTTP transports.
 - **Multi-Benchmark**: Evaluated on both **MBPP** (Mostly Basic Python Problems) and **SWE-bench** (real-world repo bug fixing).
-- **Multi-Provider LLM Support**: Abstract provider layer supporting free-tier quotas and token rotation.
+- **Multi-Provider LLM Support**: Several API tokens per provider, rotated on rate-limit / quota exhaustion, with ordered provider fallback (`ModelConfig.api_key_env_vars`, `ModelConfig.fallbacks`).
 
 ---
 
