@@ -20,6 +20,7 @@ from agent_smith.llm.providers import (
     classify_failure,
     load_provider_chain,
 )
+from agent_smith.llm.usage import TrackedProvider, UsageTotals, UsageTracker
 
 __all__ = [
     "AllProvidersExhaustedError",
@@ -35,6 +36,9 @@ __all__ = [
     "OpenAICompatProvider",
     "ProviderChain",
     "TokenPool",
+    "TrackedProvider",
+    "UsageTotals",
+    "UsageTracker",
     "classify_failure",
     "create_provider",
     "load_provider_chain",
