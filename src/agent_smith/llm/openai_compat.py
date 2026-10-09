@@ -22,9 +22,15 @@ from agent_smith.llm.base import (
     LLMProvider,
 )
 
-__all__ = ["OpenAICompatProvider"]
+__all__ = ["OpenAICompatProvider", "make_client"]
 
-DEFAULT_TIMEOUT_S = 120.0
+
+def make_client(config: ModelConfig) -> httpx.Client:
+    return httpx.Client(timeout=_timeout(config))
+
+
+def _timeout(config: ModelConfig, total: float | None = None) -> httpx.Timeout:
+    return httpx.Timeout(total or config.timeout_s, connect=config.connect_timeout_s)
 
 
 class OpenAICompatProvider(LLMProvider):
@@ -34,12 +40,12 @@ class OpenAICompatProvider(LLMProvider):
         *,
         api_key: str | None = None,
         client: httpx.Client | None = None,
-        timeout: float = DEFAULT_TIMEOUT_S,
+        timeout: float | None = None,
     ) -> None:
         self._config = config
         self._api_key = api_key if api_key is not None else config.api_key
         self._owns_client = client is None
-        self._client = client or httpx.Client(timeout=timeout)
+        self._client = client or httpx.Client(timeout=_timeout(config, timeout))
 
     @property
     def api_url(self) -> str:

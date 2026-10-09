@@ -14,7 +14,7 @@ from agent_smith.llm import (
     FailoverProvider,
     FailureKind,
     LLMAPIError,
-    LLMConnectionError,
+    LLMRetriesExhaustedError,
     ProviderChain,
     TokenPool,
     classify_failure,
@@ -193,7 +193,7 @@ def test_failover_provider_connection_errors_rotate(monkeypatch):
         raise httpx.ConnectTimeout("slow", request=req)
 
     provider = failover(monkeypatch, handler, max_attempts=6)
-    with pytest.raises(LLMConnectionError):
+    with pytest.raises(LLMRetriesExhaustedError):
         provider.chat(MSGS)
 
 
