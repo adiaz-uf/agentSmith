@@ -25,6 +25,7 @@ __all__ = [
     "DEFAULT_AUTHORIZED_IMPORTS",
     "ModelConfig",
     "SandboxConfig",
+    "build_model_config",
     "get_api_key",
     "load_env",
     "load_model_config",
@@ -120,6 +121,13 @@ def load_sandbox_config(path: Path | str | None = None) -> SandboxConfig:
 def load_model_config(path: Path | str) -> ModelConfig:
     """Load model configuration from a JSON file."""
     return ModelConfig.from_file(path)
+
+
+def build_model_config(model_name: str, provider_url: str | None = None) -> ModelConfig:
+    """Build a ModelConfig from the `--model-name` / `--provider-url` CLI values."""
+    if provider_url is None:
+        return ModelConfig(model_name=model_name)
+    return ModelConfig(model_name=model_name, provider_url=provider_url)
 
 
 def get_api_key(
