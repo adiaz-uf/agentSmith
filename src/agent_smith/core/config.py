@@ -24,6 +24,7 @@ __all__ = [
     "DEFAULT_ALLOWED_DIRECTORIES",
     "DEFAULT_AUTHORIZED_IMPORTS",
     "ModelConfig",
+    "ProviderConfig",
     "SandboxConfig",
     "build_model_config",
     "get_api_key",
@@ -31,6 +32,33 @@ __all__ = [
     "load_model_config",
     "load_sandbox_config",
 ]
+
+
+class ProviderConfig(BaseModel):
+    """One LLM API provider with one or more API keys (resolved from the environment)."""
+
+    model_config = ConfigDict(extra="forbid")
+
+    name: str = Field(..., description="Human-readable provider name (e.g. 'openrouter').")
+    provider_url: str = Field(..., description="Base URL of the provider endpoint.")
+    api_key_env_vars: list[str] = Field(
+        default_factory=list,
+        description="Env vars holding keys. Each may hold several comma-separated keys.",
+    )
+    model_name: str | None = Field(
+        default=None, description="Model to use on this provider (overrides the primary model)."
+    )
+
+    @property
+    def api_keys(self) -> list[str]:
+        """Resolve all non-empty, de-duplicated keys from the environment."""
+        keys: list[str] = []
+        for var in self.api_key_env_vars:
+            for part in os.environ.get(var, "").split(","):
+                part = part.strip()
+                if part and part not in keys:
+                    keys.append(part)
+        return keys
 
 
 class ModelConfig(BaseModel):
@@ -50,6 +78,17 @@ class ModelConfig(BaseModel):
         default="OPENROUTER_API_KEY",
         description="Name of the environment variable containing the API key.",
     )
+    api_key_env_vars: list[str] = Field(
+        default_factory=list,
+        description=(
+            "Additional env vars holding API keys for token rotation. Each variable may "
+            "hold several comma-separated keys."
+        ),
+    )
+    fallbacks: list[ProviderConfig] = Field(
+        default_factory=list,
+        description="Fallback providers, tried in order once the primary's tokens are exhausted.",
+    )
     temperature: float = Field(
         default=0.0,
         ge=0.0,
@@ -66,6 +105,17 @@ class ModelConfig(BaseModel):
     def api_key(self) -> str | None:
         """Resolve the API key from environment."""
         return os.environ.get(self.api_key_env_var)
+
+    @property
+    def primary_provider(self) -> ProviderConfig:
+        """The primary provider, with all of its rotation keys."""
+        env_vars = [self.api_key_env_var, *self.api_key_env_vars]
+        return ProviderConfig(
+            name="primary",
+            provider_url=self.provider_url,
+            api_key_env_vars=list(dict.fromkeys(env_vars)),
+            model_name=self.model_name,
+        )
 
     @classmethod
     def from_file(cls, path: Path | str) -> ModelConfig:
