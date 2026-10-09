@@ -83,7 +83,20 @@ class ChatResponse(BaseModel):
     api_url: str = Field(..., description="Base URL of the provider that served the request.")
     model_name: str = Field(..., description="Model identifier used for the request.")
     input_tokens: int = Field(default=0, ge=0)
-    output_tokens: int = Field(default=0, ge=0)
+    output_tokens: int = Field(
+        default=0,
+        ge=0,
+        description="All generated tokens, reasoning/thinking tokens included.",
+    )
+    reasoning_tokens: int = Field(
+        default=0,
+        ge=0,
+        description="Subset of `output_tokens` spent on hidden reasoning (counts toward limits).",
+    )
+    usage_estimated: bool = Field(
+        default=False,
+        description="True when the provider reported no usage and token counts are estimates.",
+    )
     request_time_ms: float = Field(default=0.0, ge=0.0)
     finish_reason: str | None = None
     retries: int = Field(
