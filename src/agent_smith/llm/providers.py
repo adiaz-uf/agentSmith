@@ -7,13 +7,13 @@ back to the next provider when every key of one provider is exhausted.
 
 from __future__ import annotations
 
-import enum
 import logging
 import time
 from collections.abc import Callable, Mapping
 from dataclasses import dataclass, field
 
 from agent_smith.core.config import ModelConfig, ProviderConfig
+from agent_smith.llm.base import FailureKind, LLMError
 
 __all__ = [
     "AllProvidersExhaustedError",
@@ -31,7 +31,6 @@ logger = logging.getLogger(__name__)
 DEFAULT_COOLDOWN_S = 30.0
 MAX_COOLDOWN_S = 3600.0
 QUOTA_COOLDOWN_S = 3600.0
-MAX_TRANSIENT_RETRIES = 2
 _QUOTA_MARKERS = ("quota", "insufficient", "daily", "credits", "billing")
 
 
@@ -40,15 +39,7 @@ def mask_key(key: str) -> str:
     return f"...{key[-4:]}" if len(key) > 4 else "***"
 
 
-class FailureKind(enum.Enum):
-    RATE_LIMIT = "rate_limit"  # rotate, short cooldown
-    QUOTA = "quota"  # rotate, long cooldown
-    AUTH = "auth"  # key is invalid: drop it permanently
-    TRANSIENT = "transient"  # retry same key a few times, then rotate
-    FATAL = "fatal"  # bad request: rotating will not help
-
-
-class AllProvidersExhaustedError(RuntimeError):
+class AllProvidersExhaustedError(LLMError):
     """Every token of every provider is cooling down or disabled."""
 
     def __init__(self, retry_after: float | None):
