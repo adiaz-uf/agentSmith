@@ -8,6 +8,8 @@ from typing import Literal
 
 from pydantic import BaseModel, ConfigDict, Field
 
+from agent_smith.core.errors import LLMError
+
 __all__ = [
     "ChatMessage",
     "ChatResponse",
@@ -16,10 +18,6 @@ __all__ = [
     "LLMError",
     "LLMProvider",
 ]
-
-
-class LLMError(Exception):
-    """Base class for all provider errors."""
 
 
 class LLMAPIError(LLMError):

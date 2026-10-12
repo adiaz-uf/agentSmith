@@ -4,7 +4,6 @@ from __future__ import annotations
 
 import sys
 from pathlib import Path
-from typing import Any
 
 from agent_smith.core.models import (
     SolutionOutput,
@@ -67,9 +66,7 @@ def record_evaluation_crash(
     """Construct a failed SolutionOutput upon unhandled exception and write solution.json."""
     normalized_benchmark = str(benchmark).strip().lower()
     if normalized_benchmark not in ("mbpp", "swebench"):
-        raise ValueError(
-            f"Invalid benchmark: '{benchmark}'. Must be 'mbpp' or 'swebench'."
-        )
+        raise ValueError(f"Invalid benchmark: '{benchmark}'. Must be 'mbpp' or 'swebench'.")
 
     if isinstance(error, Exception):
         err_str = f"{type(error).__name__}: {error}"
