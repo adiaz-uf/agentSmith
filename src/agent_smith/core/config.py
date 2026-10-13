@@ -12,6 +12,7 @@ import os
 import random
 from collections.abc import Callable
 from pathlib import Path
+from typing import Literal
 
 from dotenv import load_dotenv
 from pydantic import BaseModel, ConfigDict, Field
@@ -119,6 +120,14 @@ class ModelConfig(BaseModel):
     timeout_s: float = Field(default=120.0, gt=0, description="Total per-request timeout.")
     connect_timeout_s: float = Field(default=10.0, gt=0, description="Connection timeout.")
     retry: RetryPolicy = Field(default_factory=RetryPolicy)
+    prompt_format: Literal["python", "xml", "hermes", "react"] = Field(
+        default="python",
+        description="Prompt/tool-call format; selects the default stop sequences.",
+    )
+    stop_sequences: list[str] | None = Field(
+        default=None,
+        description="Stop sequences for every request on this model; None = use the format's.",
+    )
     temperature: float = Field(
         default=0.0,
         ge=0.0,
