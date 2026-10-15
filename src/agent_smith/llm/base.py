@@ -99,6 +99,10 @@ class ChatResponse(BaseModel):
     )
     request_time_ms: float = Field(default=0.0, ge=0.0)
     finish_reason: str | None = None
+    stop_sequence: str | None = Field(
+        default=None,
+        description="Stop sequence that ended generation (stripped from content), if any.",
+    )
     retries: int = Field(
         default=0,
         ge=0,

@@ -21,6 +21,7 @@ from agent_smith.llm.base import (
     LLMConnectionError,
     LLMProvider,
 )
+from agent_smith.llm.stop import normalize_for_provider, resolve_stop_sequences, truncate_at_stop
 
 __all__ = ["OpenAICompatProvider", "make_client"]
 
@@ -106,8 +107,13 @@ class OpenAICompatProvider(LLMProvider):
             "temperature": self._config.temperature if temperature is None else temperature,
             "max_tokens": self._config.max_tokens if max_tokens is None else max_tokens,
         }
-        if stop:
-            payload["stop"] = list(stop)
+        stop_list = normalize_for_provider(
+            stop
+            if stop is not None
+            else resolve_stop_sequences(self._config.prompt_format, self._config.stop_sequences)
+        )
+        if stop_list:
+            payload["stop"] = stop_list
         headers = {"Authorization": f"Bearer {self._api_key}"} if self._api_key else {}
         url = f"{self.api_url.rstrip('/')}/chat/completions"
 
@@ -135,6 +141,8 @@ class OpenAICompatProvider(LLMProvider):
                 status_code=response.status_code,
             ) from exc
 
+        # Some backends ignore `stop`; never let text past a stop sequence through.
+        content, stop_hit = truncate_at_stop(content, stop_list)
         input_tokens, output_tokens, reasoning_tokens, estimated = _parse_usage(
             data.get("usage"), messages, content
         )
@@ -146,6 +154,7 @@ class OpenAICompatProvider(LLMProvider):
             output_tokens=output_tokens,
             reasoning_tokens=reasoning_tokens,
             usage_estimated=estimated,
+            stop_sequence=stop_hit,
             request_time_ms=elapsed_ms,
             finish_reason=choice.get("finish_reason"),
         )
