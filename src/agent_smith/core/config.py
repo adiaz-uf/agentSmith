@@ -9,6 +9,8 @@ Supports:
 from __future__ import annotations
 
 import os
+import random
+from collections.abc import Callable
 from pathlib import Path
 
 from dotenv import load_dotenv
@@ -25,6 +27,7 @@ __all__ = [
     "DEFAULT_AUTHORIZED_IMPORTS",
     "ModelConfig",
     "ProviderConfig",
+    "RetryPolicy",
     "SandboxConfig",
     "build_model_config",
     "get_api_key",
@@ -32,6 +35,30 @@ __all__ = [
     "load_model_config",
     "load_sandbox_config",
 ]
+
+
+class RetryPolicy(BaseModel):
+    """Backoff schedule for transient provider failures (timeouts, connection errors, 5xx)."""
+
+    model_config = ConfigDict(extra="forbid")
+
+    max_retries: int = Field(default=3, ge=0, description="Backoff retries before rotating away.")
+    base_delay_s: float = Field(default=1.0, ge=0.0)
+    backoff_factor: float = Field(default=2.0, ge=1.0)
+    max_delay_s: float = Field(default=30.0, ge=0.0)
+    jitter: float = Field(default=0.25, ge=0.0, le=1.0, description="Relative +/- jitter.")
+
+    def delay(
+        self,
+        attempt: int,
+        retry_after: float | None = None,
+        rng: Callable[[], float] = random.random,
+    ) -> float:
+        """Seconds to wait before retry number ``attempt`` (1-based)."""
+        if retry_after is not None:
+            return min(max(retry_after, 0.0), self.max_delay_s)
+        base = min(self.base_delay_s * self.backoff_factor ** (attempt - 1), self.max_delay_s)
+        return min(base * (1.0 + self.jitter * (2.0 * rng() - 1.0)), self.max_delay_s)
 
 
 class ProviderConfig(BaseModel):
@@ -89,6 +116,9 @@ class ModelConfig(BaseModel):
         default_factory=list,
         description="Fallback providers, tried in order once the primary's tokens are exhausted.",
     )
+    timeout_s: float = Field(default=120.0, gt=0, description="Total per-request timeout.")
+    connect_timeout_s: float = Field(default=10.0, gt=0, description="Connection timeout.")
+    retry: RetryPolicy = Field(default_factory=RetryPolicy)
     temperature: float = Field(
         default=0.0,
         ge=0.0,

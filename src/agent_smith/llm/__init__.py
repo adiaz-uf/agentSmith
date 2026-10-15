@@ -3,17 +3,18 @@
 from agent_smith.llm.base import (
     ChatMessage,
     ChatResponse,
+    FailureKind,
     LLMAPIError,
     LLMConnectionError,
     LLMError,
     LLMProvider,
+    LLMRetriesExhaustedError,
 )
 from agent_smith.llm.factory import create_provider
 from agent_smith.llm.failover import FailoverProvider
 from agent_smith.llm.openai_compat import OpenAICompatProvider
 from agent_smith.llm.providers import (
     AllProvidersExhaustedError,
-    FailureKind,
     ProviderChain,
     TokenPool,
     classify_failure,
@@ -30,6 +31,7 @@ __all__ = [
     "LLMConnectionError",
     "LLMError",
     "LLMProvider",
+    "LLMRetriesExhaustedError",
     "OpenAICompatProvider",
     "ProviderChain",
     "TokenPool",
