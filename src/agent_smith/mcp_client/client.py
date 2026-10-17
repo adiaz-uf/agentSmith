@@ -3,15 +3,17 @@
 from __future__ import annotations
 
 import logging
-from collections.abc import Sequence
+from collections.abc import Mapping, Sequence
 from pathlib import Path
 from types import TracebackType
 from typing import Any
 
 import anyio
+import httpx2
 from anyio.from_thread import BlockingPortal, start_blocking_portal
 from mcp import ClientSession, StdioServerParameters
 from mcp.client.stdio import stdio_client
+from mcp.client.streamable_http import create_mcp_http_client, streamable_http_client
 from mcp.shared.exceptions import MCPError as SDKMCPError
 from mcp.types import (
     CallToolResult,
@@ -29,7 +31,7 @@ from agent_smith.mcp_client.exceptions import (
     MCPTimeoutError,
     MCPToolCallError,
 )
-from agent_smith.mcp_client.transports import build_stdio_params
+from agent_smith.mcp_client.transports import build_stdio_params, validate_http_url
 
 __all__ = ["MCPClient"]
 
@@ -47,14 +49,30 @@ def _unwrap_exception(exc: BaseException) -> BaseException:
 class MCPClient:
     """Client for Model Context Protocol (MCP) servers."""
 
-    def __init__(self, params: StdioServerParameters) -> None:
+    def __init__(
+        self,
+        params: StdioServerParameters | None = None,
+        *,
+        url: str | None = None,
+        http_client: Any | None = None,
+        owns_http_client: bool = False,
+    ) -> None:
+        if params is None and url is None:
+            raise ValueError("Either 'params' (for stdio) or 'url' (for HTTP) must be provided.")
+        if params is not None and url is not None:
+            raise ValueError("Cannot specify both 'params' and 'url'.")
+
         self._params = params
+        self._url = validate_http_url(url) if url is not None else None
+        self._http_client = http_client
+        self._owns_http_client = owns_http_client
+
         self._portal_cm: Any | None = None
         self._portal: BlockingPortal | None = None
         self._session: ClientSession | None = None
         self._init_result: Any | None = None
         self._stop_evt: anyio.Event | None = None
-        self._async_stdio_cm: Any | None = None
+        self._async_transport_cm: Any | None = None
         self._async_session_cm: Any | None = None
 
     @classmethod
@@ -62,15 +80,51 @@ class MCPClient:
         cls,
         command: str | Sequence[str],
         *,
-        env: dict[str, str] | None = None,
+        env: Mapping[str, str | int | float | bool] | None = None,
         cwd: str | Path | None = None,
     ) -> MCPClient:
         """Create an MCPClient configured for standard I/O."""
         params = build_stdio_params(command, env=env, cwd=cwd)
-        return cls(params)
+        return cls(params=params)
+
+    @classmethod
+    def from_http(
+        cls,
+        url: str,
+        *,
+        headers: Mapping[str, str] | None = None,
+        http_client: Any | None = None,
+    ) -> MCPClient:
+        """Create an MCPClient configured for streamable HTTP transport."""
+        normalized_url = validate_http_url(url)
+        client = http_client
+        owns_http_client = False
+        if client is None and headers is not None:
+            client = create_mcp_http_client(headers=dict(headers))
+            owns_http_client = True
+        return cls(url=normalized_url, http_client=client, owns_http_client=owns_http_client)
+
+    @classmethod
+    def from_url(
+        cls,
+        url: str,
+        *,
+        headers: Mapping[str, str] | None = None,
+        http_client: Any | None = None,
+    ) -> MCPClient:
+        """Alias for from_http."""
+        return cls.from_http(url=url, headers=headers, http_client=http_client)
 
     @property
-    def params(self) -> StdioServerParameters:
+    def transport(self) -> str:
+        return "stdio" if self._params is not None else "http"
+
+    @property
+    def url(self) -> str | None:
+        return self._url
+
+    @property
+    def params(self) -> StdioServerParameters | None:
         return self._params
 
     @property
@@ -95,6 +149,14 @@ class MCPClient:
             return self._init_result.instructions
         return None
 
+    @property
+    def _target_description(self) -> str:
+        if self._url is not None:
+            return self._url
+        if self._params is not None:
+            return self._params.command
+        return "unknown"
+
     def connect(self, timeout: float = 30.0) -> MCPClient:
         """Connect to the server and initialize the session."""
         if self.is_connected:
@@ -108,8 +170,13 @@ class MCPClient:
 
         async def _worker() -> None:
             try:
+                if self._params is not None:
+                    transport_cm = stdio_client(self._params)
+                else:
+                    transport_cm = streamable_http_client(self._url, http_client=self._http_client)
+
                 async with (
-                    stdio_client(self._params) as (read_stream, write_stream),
+                    transport_cm as (read_stream, write_stream),
                     ClientSession(read_stream, write_stream) as session,
                 ):
                     init_result = await session.initialize()
@@ -120,6 +187,16 @@ class MCPClient:
             except Exception as exc:  # noqa: BLE001
                 holder["error"] = exc
                 ready_evt.set()
+            finally:
+                if (
+                    self._owns_http_client
+                    and self._http_client is not None
+                    and not getattr(self._http_client, "is_closed", False)
+                ):
+                    try:
+                        await self._http_client.aclose()
+                    except Exception:  # noqa: BLE001, S110
+                        pass
 
         portal.start_task_soon(_worker)
 
@@ -136,7 +213,7 @@ class MCPClient:
                 pass
             portal_cm.__exit__(None, None, None)
             raise MCPTimeoutError(
-                f"Timed out after {timeout:.1f}s connecting to MCP server: {self._params.command}"
+                f"Timed out after {timeout:.1f}s connecting to MCP server: {self._target_description}"
             ) from exc
 
         if "error" in holder:
@@ -154,10 +231,11 @@ class MCPClient:
         self._init_result = holder["init_result"]
         self._stop_evt = stop_evt
         logger.info(
-            "Connected to MCP server '%s' (version %s) via stdio: %s",
+            "Connected to MCP server '%s' (version %s) via %s: %s",
             self.server_name,
             self.server_version,
-            self._params.command,
+            self.transport,
+            self._target_description,
         )
         return self
 
@@ -178,6 +256,16 @@ class MCPClient:
                 self._init_result = None
                 self._stop_evt = None
                 logger.info("MCP client connection closed.")
+
+        if (
+            self._owns_http_client
+            and self._http_client is not None
+            and not getattr(self._http_client, "is_closed", False)
+        ):
+            try:
+                anyio.run(self._http_client.aclose)
+            except Exception:  # noqa: BLE001, S110
+                pass
 
     def __enter__(self) -> MCPClient:  # noqa: PYI034 (py3.10 has no typing.Self)
         return self.connect()
@@ -235,18 +323,31 @@ class MCPClient:
             return self
 
         try:
-            self._async_stdio_cm = stdio_client(self._params)
-            read_stream, write_stream = await self._async_stdio_cm.__aenter__()
+            if self._params is not None:
+                self._async_transport_cm = stdio_client(self._params)
+            else:
+                self._async_transport_cm = streamable_http_client(
+                    self._url, http_client=self._http_client
+                )
+
+            read_stream, write_stream = await self._async_transport_cm.__aenter__()
             self._async_session_cm = ClientSession(read_stream, write_stream)
             self._session = await self._async_session_cm.__aenter__()
             self._init_result = await self._session.initialize()
+            logger.info(
+                "Connected (async) to MCP server '%s' (version %s) via %s: %s",
+                self.server_name,
+                self.server_version,
+                self.transport,
+                self._target_description,
+            )
             return self
         except Exception as exc:
             await self.close_async()
             raise self._translate_error(exc) from exc
 
     async def close_async(self) -> None:
-        """Asynchronously close the MCP session and terminate the subprocess."""
+        """Asynchronously close the MCP session and terminate transport."""
         if self._async_session_cm is not None:
             try:
                 await self._async_session_cm.__aexit__(None, None, None)
@@ -254,13 +355,24 @@ class MCPClient:
                 pass
             self._async_session_cm = None
             self._session = None
+            self._init_result = None
 
-        if self._async_stdio_cm is not None:
+        if self._async_transport_cm is not None:
             try:
-                await self._async_stdio_cm.__aexit__(None, None, None)
+                await self._async_transport_cm.__aexit__(None, None, None)
             except Exception:  # noqa: BLE001, S110
                 pass
-            self._async_stdio_cm = None
+            self._async_transport_cm = None
+
+        if (
+            self._owns_http_client
+            and self._http_client is not None
+            and not getattr(self._http_client, "is_closed", False)
+        ):
+            try:
+                await self._http_client.aclose()
+            except Exception:  # noqa: BLE001, S110
+                pass
 
     async def __aenter__(self) -> MCPClient:  # noqa: PYI034 (py3.10 has no typing.Self)
         return await self.connect_async()
@@ -301,18 +413,36 @@ class MCPClient:
         if isinstance(unwrapped, MCPError):
             return unwrapped
 
+        target = self._target_description
+
         if isinstance(unwrapped, FileNotFoundError):
-            return MCPConnectionError(
-                f"Cannot spawn MCP server: executable '{self._params.command}' not found."
-            )
+            return MCPConnectionError(f"Cannot spawn MCP server: executable '{target}' not found.")
         if isinstance(unwrapped, PermissionError):
+            return MCPConnectionError(f"Permission denied attempting to run executable '{target}'.")
+
+        if isinstance(
+            unwrapped,
+            (
+                httpx2.ConnectError,
+                httpx2.NetworkError,
+                httpx2.ConnectTimeout,
+            ),
+        ):
             return MCPConnectionError(
-                f"Permission denied attempting to run executable '{self._params.command}'."
+                f"Cannot connect to MCP HTTP server at '{target}': {unwrapped}"
+            )
+
+        if isinstance(unwrapped, httpx2.TimeoutException):
+            return MCPTimeoutError(
+                f"HTTP request timed out communicating with MCP server '{target}': {unwrapped}"
+            )
+
+        if isinstance(unwrapped, httpx2.HTTPStatusError):
+            return MCPConnectionError(
+                f"MCP server at '{target}' returned HTTP error {unwrapped.response.status_code}: {unwrapped}"
             )
         if isinstance(unwrapped, TimeoutError):
-            return MCPTimeoutError(
-                f"Timed out during MCP operation on '{self._params.command}': {unwrapped}"
-            )
+            return MCPTimeoutError(f"Timed out during MCP operation on '{target}': {unwrapped}")
 
         err_str = str(unwrapped).lower()
         if isinstance(unwrapped, SDKMCPError):
@@ -327,5 +457,8 @@ class MCPClient:
 
     def __repr__(self) -> str:
         status = "connected" if self.is_connected else "disconnected"
-        cmd = self._params.command
-        return f"MCPClient(transport='stdio', command={cmd!r}, status={status!r})"
+        if self._params is not None:
+            return (
+                f"MCPClient(transport='stdio', command={self._params.command!r}, status={status!r})"
+            )
+        return f"MCPClient(transport='http', url={self._url!r}, status={status!r})"
