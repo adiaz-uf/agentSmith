@@ -11,6 +11,7 @@ from agent_smith.mcp_client import (
     MCPClient,
     MCPConnectionError,
     MCPServerCrashedError,
+    MCPTimeoutError,
     build_stdio_params,
     parse_stdio_command,
 )
@@ -138,6 +139,13 @@ class TestStdioClientLifecycle:
         client = MCPClient.from_stdio([sys.executable, str(crash_script)])
         with pytest.raises((MCPServerCrashedError, MCPConnectionError)):
             client.connect()
+
+    def test_translate_timeout_error(self):
+        client = MCPClient.from_stdio("python server.py")
+        exc = TimeoutError("operation timed out")
+        translated = client._translate_error(exc)
+        assert isinstance(translated, MCPTimeoutError)
+        assert "Timed out" in str(translated)
 
 
 class TestStdioClientProtocol:

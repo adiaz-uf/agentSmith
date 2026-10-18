@@ -341,6 +341,10 @@ class MCPClient:
             return MCPConnectionError(
                 f"Permission denied attempting to run executable '{self._params.command}'."
             )
+        if isinstance(unwrapped, TimeoutError):
+            return MCPTimeoutError(
+                f"Timed out during MCP operation on '{self._params.command}': {unwrapped}"
+            )
 
         err_str = str(unwrapped).lower()
         if isinstance(unwrapped, SDKMCPError):
