@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import sys
 from pathlib import Path
+from typing import Any
 
 from agent_smith.core.models import (
     SolutionOutput,
@@ -26,6 +27,9 @@ class TaskLoadingError(AgentSmithError):
 
 class LLMError(AgentSmithError):
     """Raised when LLM API requests fail or exhaust retry limits."""
+
+    attempts: int = 0
+    kind: Any = None
 
 
 class SandboxError(AgentSmithError):

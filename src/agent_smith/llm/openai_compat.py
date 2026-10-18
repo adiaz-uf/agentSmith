@@ -21,10 +21,54 @@ from agent_smith.llm.base import (
     LLMConnectionError,
     LLMProvider,
 )
+from agent_smith.llm.stop import normalize_for_provider, resolve_stop_sequences, truncate_at_stop
 
-__all__ = ["OpenAICompatProvider"]
+__all__ = ["OpenAICompatProvider", "make_client"]
 
-DEFAULT_TIMEOUT_S = 120.0
+
+CHARS_PER_TOKEN = 4  # rough rule of thumb; only used when the provider reports no usage
+MESSAGE_OVERHEAD_TOKENS = 4  # chat framing per message
+
+
+def _count(value: Any) -> int:
+    return value if isinstance(value, int) and not isinstance(value, bool) and value > 0 else 0
+
+
+def _parse_usage(
+    usage: Any, messages: Sequence[ChatMessage], content: str
+) -> tuple[int, int, int, bool]:
+    """Return (input, output, reasoning, estimated) tokens for one response.
+
+    ``output`` always includes reasoning tokens. Provider numbers are never overridden; the
+    ~4 chars/token estimate fills in only what is missing or zero for a non-empty exchange.
+    """
+    usage = usage if isinstance(usage, dict) else {}
+    input_tokens = _count(usage.get("prompt_tokens"))
+    output_tokens = _count(usage.get("completion_tokens"))
+    details = usage.get("completion_tokens_details")
+    reasoning = _count(details.get("reasoning_tokens") if isinstance(details, dict) else None)
+    reasoning = reasoning or _count(usage.get("reasoning_tokens"))
+    if reasoning > output_tokens:
+        # Cannot be a subset of completion_tokens: the provider reports it separately.
+        output_tokens += reasoning
+
+    estimated = False
+    if input_tokens == 0 and messages:
+        chars = sum(len(m.content) for m in messages)
+        input_tokens = chars // CHARS_PER_TOKEN + MESSAGE_OVERHEAD_TOKENS * len(messages)
+        estimated = True
+    if output_tokens == 0 and content:
+        output_tokens = max(1, len(content) // CHARS_PER_TOKEN)
+        estimated = True
+    return input_tokens, output_tokens, reasoning, estimated
+
+
+def make_client(config: ModelConfig) -> httpx.Client:
+    return httpx.Client(timeout=_timeout(config))
+
+
+def _timeout(config: ModelConfig, total: float | None = None) -> httpx.Timeout:
+    return httpx.Timeout(total or config.timeout_s, connect=config.connect_timeout_s)
 
 
 class OpenAICompatProvider(LLMProvider):
@@ -34,12 +78,12 @@ class OpenAICompatProvider(LLMProvider):
         *,
         api_key: str | None = None,
         client: httpx.Client | None = None,
-        timeout: float = DEFAULT_TIMEOUT_S,
+        timeout: float | None = None,
     ) -> None:
         self._config = config
         self._api_key = api_key if api_key is not None else config.api_key
         self._owns_client = client is None
-        self._client = client or httpx.Client(timeout=timeout)
+        self._client = client or httpx.Client(timeout=_timeout(config, timeout))
 
     @property
     def api_url(self) -> str:
@@ -63,8 +107,13 @@ class OpenAICompatProvider(LLMProvider):
             "temperature": self._config.temperature if temperature is None else temperature,
             "max_tokens": self._config.max_tokens if max_tokens is None else max_tokens,
         }
-        if stop:
-            payload["stop"] = list(stop)
+        stop_list = normalize_for_provider(
+            stop
+            if stop is not None
+            else resolve_stop_sequences(self._config.prompt_format, self._config.stop_sequences)
+        )
+        if stop_list:
+            payload["stop"] = stop_list
         headers = {"Authorization": f"Bearer {self._api_key}"} if self._api_key else {}
         url = f"{self.api_url.rstrip('/')}/chat/completions"
 
@@ -79,6 +128,8 @@ class OpenAICompatProvider(LLMProvider):
             raise LLMAPIError(
                 f"{self.api_url} returned HTTP {response.status_code}: {response.text[:500]}",
                 status_code=response.status_code,
+                headers=response.headers,
+                body=response.text,
             )
         try:
             data = response.json()
@@ -90,13 +141,20 @@ class OpenAICompatProvider(LLMProvider):
                 status_code=response.status_code,
             ) from exc
 
-        usage = data.get("usage") or {}
+        # Some backends ignore `stop`; never let text past a stop sequence through.
+        content, stop_hit = truncate_at_stop(content, stop_list)
+        input_tokens, output_tokens, reasoning_tokens, estimated = _parse_usage(
+            data.get("usage"), messages, content
+        )
         return ChatResponse(
             content=content,
             api_url=self.api_url,
             model_name=self.model_name,
-            input_tokens=usage.get("prompt_tokens") or 0,
-            output_tokens=usage.get("completion_tokens") or 0,
+            input_tokens=input_tokens,
+            output_tokens=output_tokens,
+            reasoning_tokens=reasoning_tokens,
+            usage_estimated=estimated,
+            stop_sequence=stop_hit,
             request_time_ms=elapsed_ms,
             finish_reason=choice.get("finish_reason"),
         )

@@ -15,7 +15,10 @@ Unlike traditional LLM workflows that rely on static prompts or simple JSON tool
 - **Configurable Sandbox**: Strict execution boundary preventing privilege escalation, unauthorized imports, network access, or path escapes.
 - **Model Context Protocol (MCP)**: Clean tool abstraction over stdio/HTTP transports.
 - **Multi-Benchmark**: Evaluated on both **MBPP** (Mostly Basic Python Problems) and **SWE-bench** (real-world repo bug fixing).
-- **Multi-Provider LLM Support**: Abstract provider layer supporting free-tier quotas and token rotation.
+- **Multi-Provider LLM Support**: Several API tokens per provider, rotated on rate-limit / quota exhaustion, with ordered provider fallback (`ModelConfig.api_key_env_vars`, `ModelConfig.fallbacks`).
+- **Resilient LLM calls**: Rate limits rotate keys, transient errors (timeouts, 5xx) retry with exponential backoff (`ModelConfig.retry`, `timeout_s`, `connect_timeout_s`), hard errors fail fast. Every failure surfaces as an `LLMError`; `ChatResponse.retries` and `FailoverProvider.total_requests` feed `StepMetrics.retries` / `SolutionOutput.total_requests`.
+- **Usage tracking**: `UsageTracker` / `TrackedProvider` aggregate requests, retries, input/output (reasoning included) tokens and latency into `StepMetrics` and `SolutionOutput.total_*`; missing provider usage is estimated (~4 chars/token) and flagged.
+- **Stop sequences**: generation stops at the end of a tool call (`<end_code>`, `</tool_call>`, `Observation:`); defaults follow `ModelConfig.prompt_format` and can be overridden with `ModelConfig.stop_sequences` or per call, with a client-side cut for backends that ignore `stop`.
 
 ---
 

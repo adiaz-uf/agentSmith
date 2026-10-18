@@ -17,8 +17,10 @@ sandbox = "agent_smith.sandbox.cli:main"
 
 [dependency-groups]
 dev = [
+    "anyio[pytest]>=4.0",
     "pytest>=8.0",
     "ruff>=0.6",
+    "uvicorn>=0.30",
 ]
 
 [build-system]

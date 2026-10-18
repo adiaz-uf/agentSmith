@@ -17,6 +17,7 @@ from agent_smith.core.errors import (
     record_evaluation_crash,
 )
 from agent_smith.core.models import SolutionOutput
+from agent_smith.mcp_client.exceptions import MCPError
 
 
 class TestErrorHierarchy:
@@ -25,6 +26,7 @@ class TestErrorHierarchy:
         assert issubclass(TaskLoadingError, AgentSmithError)
         assert issubclass(LLMError, AgentSmithError)
         assert issubclass(SandboxError, AgentSmithError)
+        assert issubclass(MCPError, AgentSmithError)
         assert issubclass(AgentSmithError, Exception)
 
     def test_exceptions_can_be_raised_and_caught(self):

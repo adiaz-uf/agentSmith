@@ -9,7 +9,10 @@ Supports:
 from __future__ import annotations
 
 import os
+import random
+from collections.abc import Callable
 from pathlib import Path
+from typing import Literal
 
 from dotenv import load_dotenv
 from pydantic import BaseModel, ConfigDict, Field
@@ -24,6 +27,8 @@ __all__ = [
     "DEFAULT_ALLOWED_DIRECTORIES",
     "DEFAULT_AUTHORIZED_IMPORTS",
     "ModelConfig",
+    "ProviderConfig",
+    "RetryPolicy",
     "SandboxConfig",
     "build_model_config",
     "get_api_key",
@@ -31,6 +36,57 @@ __all__ = [
     "load_model_config",
     "load_sandbox_config",
 ]
+
+
+class RetryPolicy(BaseModel):
+    """Backoff schedule for transient provider failures (timeouts, connection errors, 5xx)."""
+
+    model_config = ConfigDict(extra="forbid")
+
+    max_retries: int = Field(default=3, ge=0, description="Backoff retries before rotating away.")
+    base_delay_s: float = Field(default=1.0, ge=0.0)
+    backoff_factor: float = Field(default=2.0, ge=1.0)
+    max_delay_s: float = Field(default=30.0, ge=0.0)
+    jitter: float = Field(default=0.25, ge=0.0, le=1.0, description="Relative +/- jitter.")
+
+    def delay(
+        self,
+        attempt: int,
+        retry_after: float | None = None,
+        rng: Callable[[], float] = random.random,
+    ) -> float:
+        """Seconds to wait before retry number ``attempt`` (1-based)."""
+        if retry_after is not None:
+            return min(max(retry_after, 0.0), self.max_delay_s)
+        base = min(self.base_delay_s * self.backoff_factor ** (attempt - 1), self.max_delay_s)
+        return min(base * (1.0 + self.jitter * (2.0 * rng() - 1.0)), self.max_delay_s)
+
+
+class ProviderConfig(BaseModel):
+    """One LLM API provider with one or more API keys (resolved from the environment)."""
+
+    model_config = ConfigDict(extra="forbid")
+
+    name: str = Field(..., description="Human-readable provider name (e.g. 'openrouter').")
+    provider_url: str = Field(..., description="Base URL of the provider endpoint.")
+    api_key_env_vars: list[str] = Field(
+        default_factory=list,
+        description="Env vars holding keys. Each may hold several comma-separated keys.",
+    )
+    model_name: str | None = Field(
+        default=None, description="Model to use on this provider (overrides the primary model)."
+    )
+
+    @property
+    def api_keys(self) -> list[str]:
+        """Resolve all non-empty, de-duplicated keys from the environment."""
+        keys: list[str] = []
+        for var in self.api_key_env_vars:
+            for part in os.environ.get(var, "").split(","):
+                part = part.strip()
+                if part and part not in keys:
+                    keys.append(part)
+        return keys
 
 
 class ModelConfig(BaseModel):
@@ -50,6 +106,28 @@ class ModelConfig(BaseModel):
         default="OPENROUTER_API_KEY",
         description="Name of the environment variable containing the API key.",
     )
+    api_key_env_vars: list[str] = Field(
+        default_factory=list,
+        description=(
+            "Additional env vars holding API keys for token rotation. Each variable may "
+            "hold several comma-separated keys."
+        ),
+    )
+    fallbacks: list[ProviderConfig] = Field(
+        default_factory=list,
+        description="Fallback providers, tried in order once the primary's tokens are exhausted.",
+    )
+    timeout_s: float = Field(default=120.0, gt=0, description="Total per-request timeout.")
+    connect_timeout_s: float = Field(default=10.0, gt=0, description="Connection timeout.")
+    retry: RetryPolicy = Field(default_factory=RetryPolicy)
+    prompt_format: Literal["python", "xml", "hermes", "react"] = Field(
+        default="python",
+        description="Prompt/tool-call format; selects the default stop sequences.",
+    )
+    stop_sequences: list[str] | None = Field(
+        default=None,
+        description="Stop sequences for every request on this model; None = use the format's.",
+    )
     temperature: float = Field(
         default=0.0,
         ge=0.0,
@@ -66,6 +144,17 @@ class ModelConfig(BaseModel):
     def api_key(self) -> str | None:
         """Resolve the API key from environment."""
         return os.environ.get(self.api_key_env_var)
+
+    @property
+    def primary_provider(self) -> ProviderConfig:
+        """The primary provider, with all of its rotation keys."""
+        env_vars = [self.api_key_env_var, *self.api_key_env_vars]
+        return ProviderConfig(
+            name="primary",
+            provider_url=self.provider_url,
+            api_key_env_vars=list(dict.fromkeys(env_vars)),
+            model_name=self.model_name,
+        )
 
     @classmethod
     def from_file(cls, path: Path | str) -> ModelConfig:
