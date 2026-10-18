@@ -45,11 +45,7 @@ def _unwrap_exception(exc: BaseException) -> BaseException:
 
 
 class MCPClient:
-    """Client for Model Context Protocol (MCP) tool servers.
-
-    Provides a clean synchronous interface (suitable for execution within the agent
-    sandbox and standard CLI workflows) as well as asynchronous context management.
-    """
+    """Client for Model Context Protocol (MCP) servers."""
 
     def __init__(self, params: StdioServerParameters) -> None:
         self._params = params
@@ -58,8 +54,6 @@ class MCPClient:
         self._session: ClientSession | None = None
         self._init_result: Any | None = None
         self._stop_evt: anyio.Event | None = None
-
-        # Asynchronous context state
         self._async_stdio_cm: Any | None = None
         self._async_session_cm: Any | None = None
 
@@ -71,52 +65,38 @@ class MCPClient:
         env: dict[str, str] | None = None,
         cwd: str | Path | None = None,
     ) -> MCPClient:
-        """Construct an MCPClient configured for standard I/O."""
+        """Create an MCPClient configured for standard I/O."""
         params = build_stdio_params(command, env=env, cwd=cwd)
         return cls(params)
 
     @property
     def params(self) -> StdioServerParameters:
-        """Return the underlying server launch parameters."""
         return self._params
 
     @property
     def is_connected(self) -> bool:
-        """Return True if the client has an active initialized session."""
         return self._session is not None
 
     @property
     def server_name(self) -> str | None:
-        """Return the server name reported during protocol initialization, or None."""
         if self._init_result and hasattr(self._init_result, "server_info"):
             return self._init_result.server_info.name
         return None
 
     @property
     def server_version(self) -> str | None:
-        """Return the server version reported during initialization, or None."""
         if self._init_result and hasattr(self._init_result, "server_info"):
             return self._init_result.server_info.version
         return None
 
     @property
     def instructions(self) -> str | None:
-        """Return optional server instructions provided during initialization."""
         if self._init_result and hasattr(self._init_result, "instructions"):
             return self._init_result.instructions
         return None
 
-    # -------------------------------------------------------------------------
-    # Synchronous Lifecycle Methods
-    # -------------------------------------------------------------------------
-
     def connect(self, timeout: float = 30.0) -> MCPClient:
-        """Launch the server process, establish communication, and perform initialization.
-
-        Raises:
-            MCPConnectionError: If the server cannot be launched or handshake fails.
-            MCPTimeoutError: If connection or initialization exceeds timeout.
-        """
+        """Connect to the server and initialize the session."""
         if self.is_connected:
             return self
 
@@ -182,7 +162,7 @@ class MCPClient:
         return self
 
     def close(self) -> None:
-        """Cleanly terminate the connection and shutdown the server process."""
+        """Close connection and shutdown server process."""
         if self._portal is not None:
             try:
                 if self._stop_evt is not None:
@@ -209,10 +189,6 @@ class MCPClient:
         exc_tb: TracebackType | None,
     ) -> None:
         self.close()
-
-    # -------------------------------------------------------------------------
-    # Synchronous Protocol Methods
-    # -------------------------------------------------------------------------
 
     def list_tools(self) -> list[Tool]:
         """Discover tools exposed by the MCP server."""
@@ -248,14 +224,10 @@ class MCPClient:
         return self._call(self._session.get_prompt, name, arguments or {})
 
     def ping(self) -> bool:
-        """Send a ping to the server to verify responsiveness."""
+        """Ping the server to verify responsiveness."""
         self._ensure_connected()
         self._call(self._session.send_ping)
         return True
-
-    # -------------------------------------------------------------------------
-    # Asynchronous Lifecycle & Protocol Methods
-    # -------------------------------------------------------------------------
 
     async def connect_async(self) -> MCPClient:
         """Asynchronously connect and initialize the MCP session."""
@@ -311,10 +283,6 @@ class MCPClient:
     ) -> CallToolResult:
         self._ensure_connected()
         return await self._session.call_tool(name, arguments or {})
-
-    # -------------------------------------------------------------------------
-    # Internal Helpers
-    # -------------------------------------------------------------------------
 
     def _ensure_connected(self) -> None:
         if not self.is_connected or self._session is None:
