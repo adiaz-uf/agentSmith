@@ -10,7 +10,11 @@ from agent_smith.mcp_client.exceptions import (
     MCPTimeoutError,
     MCPToolCallError,
 )
-from agent_smith.mcp_client.transports import build_stdio_params, parse_stdio_command
+from agent_smith.mcp_client.transports import (
+    build_stdio_params,
+    parse_stdio_command,
+    validate_http_url,
+)
 
 __all__ = [
     "MCPClient",
@@ -21,4 +25,5 @@ __all__ = [
     "MCPToolCallError",
     "build_stdio_params",
     "parse_stdio_command",
+    "validate_http_url",
 ]

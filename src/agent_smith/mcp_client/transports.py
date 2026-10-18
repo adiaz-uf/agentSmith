@@ -6,6 +6,7 @@ import os
 import shlex
 from collections.abc import Mapping, Sequence
 from pathlib import Path
+from urllib.parse import urlparse
 
 # MCP SDK Dataclass to configure a subprocess communicating via standard input/output.
 from mcp import StdioServerParameters
@@ -13,6 +14,7 @@ from mcp import StdioServerParameters
 __all__ = [
     "build_stdio_params",
     "parse_stdio_command",
+    "validate_http_url",
 ]
 
 
@@ -59,3 +61,24 @@ def build_stdio_params(
         env=merged_env,
         cwd=resolved_cwd,
     )
+
+
+def validate_http_url(url: str) -> str:
+    """Validate and normalize an HTTP or HTTPS URL for MCP streamable HTTP transport."""
+    if not isinstance(url, str):
+        raise TypeError(f"MCP server URL must be a string, got {type(url).__name__}.")
+
+    cleaned = url.strip()
+    if not cleaned:
+        raise ValueError("MCP server URL cannot be empty or whitespace-only.")
+
+    parsed = urlparse(cleaned)
+    if parsed.scheme.lower() not in ("http", "https"):
+        raise ValueError(
+            f"Unsupported MCP URL scheme: '{parsed.scheme}'. Only 'http' and 'https' are supported."
+        )
+
+    if not parsed.netloc:
+        raise ValueError(f"Invalid MCP URL: '{cleaned}' is missing host/network location.")
+
+    return cleaned
