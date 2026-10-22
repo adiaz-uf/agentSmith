@@ -9,6 +9,8 @@ from typing import Literal
 
 from pydantic import BaseModel, ConfigDict, Field
 
+from agent_smith.core.errors import LLMError
+
 __all__ = [
     "ChatMessage",
     "ChatResponse",
@@ -27,18 +29,6 @@ class FailureKind(enum.Enum):
     AUTH = "auth"  # key is invalid: drop it permanently
     TRANSIENT = "transient"  # retry with backoff, then rotate
     FATAL = "fatal"  # bad request: retrying will not help
-
-
-class LLMError(Exception):
-    """Base class for all provider errors.
-
-    ``chat`` never lets anything else escape, so ``except LLMError`` is always enough to degrade
-    gracefully (subject IV.1). ``attempts`` is the number of HTTP requests made before giving up
-    (retries included) and ``kind`` says why, when known.
-    """
-
-    attempts: int = 0
-    kind: FailureKind | None = None
 
 
 class LLMAPIError(LLMError):

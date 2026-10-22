@@ -11,7 +11,10 @@ __all__ = [
 ]
 
 
-class MCPError(Exception):
+from agent_smith.core.errors import AgentSmithError
+
+
+class MCPError(AgentSmithError):
     """Base exception for all MCP client errors."""
 
 

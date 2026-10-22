@@ -13,6 +13,7 @@ import sys
 from collections.abc import Sequence
 
 from agent_smith.core.config import load_env
+from agent_smith.core.errors import handle_cli_error
 
 
 def parse_args(argv: Sequence[str] | None = None) -> argparse.Namespace:
@@ -32,14 +33,13 @@ def parse_args(argv: Sequence[str] | None = None) -> argparse.Namespace:
 
 def main(argv: Sequence[str] | None = None) -> int:
     """Run the SWE-bench agent on a single task."""
-    args = parse_args(argv)
     try:
+        args = parse_args(argv)
         load_env(args.env_file)
-    except (FileNotFoundError, ValueError) as exc:
-        print(f"agent_swebench: {exc}", file=sys.stderr)
+        print("agent_swebench: not implemented yet", file=sys.stderr)
         return 1
-    print("agent_swebench: not implemented yet", file=sys.stderr)
-    return 1
+    except Exception as exc:  # noqa: BLE001
+        return handle_cli_error(exc, command_name="agent_swebench")
 
 
 if __name__ == "__main__":
