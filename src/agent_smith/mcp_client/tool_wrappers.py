@@ -14,6 +14,7 @@ from mcp.types import Tool
 
 from agent_smith.mcp_client.client import MCPClient
 from agent_smith.mcp_client.exceptions import MCPToolCallError
+from agent_smith.mcp_client.resources_prompts import MCPContextBridge
 
 __all__ = [
     "ToolRegistry",
@@ -153,9 +154,11 @@ class ToolRegistry:
         *,
         client: MCPClient | None = None,
         unwrap_text: bool = False,
+        expose_context: bool = False,
     ) -> None:
         self._namespace = namespace if namespace is not None else {}
         self._unwrap_text = unwrap_text
+        self._expose_context = expose_context
         self._registered_tools: set[str] = set()
         if client is not None:
             self.sync_tools(client)
@@ -172,13 +175,18 @@ class ToolRegistry:
         """Discover tools from client, remove outdated wrappers, and inject new ones.
 
         Discovery runs first, so a failing server leaves the current tools in place.
-        Tools that would shadow a non-MCP namespace entry (e.g. ``final_answer``) or a
-        Python builtin are skipped with a warning.
+        With ``expose_context`` the resource/prompt helpers (``read_resource``,
+        ``get_prompt``...) are injected too and win over same-named MCP tools.
+        Anything that would shadow a non-MCP namespace entry (e.g. ``final_answer``) or a
+        Python builtin is skipped with a warning.
         """
         new_tools = discover_tools(client, unwrap_text=self._unwrap_text)
+        helpers: dict[str, Callable[..., Any]] = {}
+        if self._expose_context:
+            helpers = MCPContextBridge(client).namespace_functions()
         self.clear_tools()
         injected: dict[str, Callable[..., Any]] = {}
-        for name, wrapper in new_tools.items():
+        for name, wrapper in [*helpers.items(), *new_tools.items()]:
             if name in self._namespace or hasattr(builtins, name):
                 logger.warning("Skipping MCP tool %r: name is reserved in the sandbox", name)
                 continue

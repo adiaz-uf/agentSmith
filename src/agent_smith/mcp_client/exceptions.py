@@ -5,6 +5,8 @@ from __future__ import annotations
 __all__ = [
     "MCPConnectionError",
     "MCPError",
+    "MCPPromptError",
+    "MCPResourceError",
     "MCPServerCrashedError",
     "MCPTimeoutError",
     "MCPToolCallError",
@@ -29,3 +31,11 @@ class MCPTimeoutError(MCPError):
 
 class MCPToolCallError(MCPError):
     """The MCP server returned an error response when executing a tool."""
+
+
+class MCPResourceError(MCPError):
+    """The MCP server failed to read or locate a requested resource."""
+
+
+class MCPPromptError(MCPError):
+    """The MCP server failed to retrieve or render a requested prompt."""
