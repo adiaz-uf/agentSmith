@@ -13,8 +13,12 @@ from typing import Any
 from mcp.types import Tool
 
 from agent_smith.mcp_client.client import MCPClient
-from agent_smith.mcp_client.exceptions import MCPToolCallError
-from agent_smith.mcp_client.resources_prompts import MCPContextBridge
+from agent_smith.mcp_client.exceptions import MCPError
+from agent_smith.mcp_client.resources_prompts import (
+    DEFAULT_MAX_OUTPUT_CHARS,
+    MCPContextBridge,
+    truncate_output,
+)
 
 __all__ = [
     "ToolRegistry",
@@ -89,6 +93,7 @@ def create_tool_wrapper(
     tool: Tool,
     *,
     unwrap_text: bool = False,
+    max_output_chars: int = DEFAULT_MAX_OUTPUT_CHARS,
 ) -> Callable[..., Any]:
     """Create a callable Python function that delegates to client.call_tool()."""
     sig = create_tool_signature(tool)
@@ -102,25 +107,21 @@ def create_tool_wrapper(
 
         # Only forward what the caller passed; the server applies its own defaults.
         server_args = {name_map[k]: v for k, v in bound.arguments.items()}
-        result = client.call_tool(tool.name, server_args)
+        try:
+            result = client.call_tool(tool.name, server_args)
+        except MCPError as exc:
+            if not unwrap_text:
+                raise
+            # Sandbox mode: failures are observations for the LLM, never crashes.
+            return truncate_output(f"Error: tool '{tool.name}' failed: {exc}", max_output_chars)
 
         if not unwrap_text:
             return result
 
+        text = "\n".join(item.text for item in result.content or [] if hasattr(item, "text"))
         if result.is_error:
-            err_msg = ""
-            if result.content:
-                err_msg = "\n".join(item.text for item in result.content if hasattr(item, "text"))
-            raise MCPToolCallError(
-                f"Tool '{tool.name}' failed on MCP server: {err_msg or 'Unknown error'}"
-            )
-
-        if result.content:
-            texts = [item.text for item in result.content if hasattr(item, "text")]
-            if texts:
-                return "\n".join(texts)
-
-        return result
+            text = f"Error: tool '{tool.name}' failed: {text or 'Unknown error'}"
+        return truncate_output(text, max_output_chars) if text else result
 
     wrapper.__name__ = sanitize_identifier(tool.name)
     wrapper.__doc__ = tool.description or f"MCP tool: {tool.name}"
@@ -134,13 +135,16 @@ def discover_tools(
     client: MCPClient,
     *,
     unwrap_text: bool = False,
+    max_output_chars: int = DEFAULT_MAX_OUTPUT_CHARS,
 ) -> dict[str, Callable[..., Any]]:
     """Discover all tools from the MCP server and return callable wrappers.
 
     Tools whose sanitized names collide get underscores appended (``a.b`` / ``a_b`` -> ``a_b_``).
     """
     return {
-        name: create_tool_wrapper(client, t, unwrap_text=unwrap_text)
+        name: create_tool_wrapper(
+            client, t, unwrap_text=unwrap_text, max_output_chars=max_output_chars
+        )
         for name, t in tool_namespace_names(client.list_tools())
     }
 
@@ -166,10 +170,12 @@ class ToolRegistry:
         client: MCPClient | None = None,
         unwrap_text: bool = False,
         expose_context: bool = False,
+        max_output_chars: int = DEFAULT_MAX_OUTPUT_CHARS,
     ) -> None:
         self._namespace = namespace if namespace is not None else {}
         self._unwrap_text = unwrap_text
         self._expose_context = expose_context
+        self._max_output_chars = max_output_chars
         self._registered_tools: set[str] = set()
         if client is not None:
             self.sync_tools(client)
@@ -191,10 +197,14 @@ class ToolRegistry:
         Anything that would shadow a non-MCP namespace entry (e.g. ``final_answer``) or a
         Python builtin is skipped with a warning.
         """
-        new_tools = discover_tools(client, unwrap_text=self._unwrap_text)
+        new_tools = discover_tools(
+            client, unwrap_text=self._unwrap_text, max_output_chars=self._max_output_chars
+        )
         helpers: dict[str, Callable[..., Any]] = {}
         if self._expose_context:
-            helpers = MCPContextBridge(client).namespace_functions()
+            helpers = MCPContextBridge(
+                client, max_output_chars=self._max_output_chars
+            ).namespace_functions()
         self.clear_tools()
         injected: dict[str, Callable[..., Any]] = {}
         for name, wrapper in [*helpers.items(), *new_tools.items()]:

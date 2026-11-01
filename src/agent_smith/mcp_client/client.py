@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import functools
 import logging
 from collections.abc import Mapping, Sequence
 from pathlib import Path
@@ -18,6 +19,7 @@ from mcp.shared.exceptions import MCPError as SDKMCPError
 from mcp.types import (
     CallToolResult,
     GetPromptResult,
+    PaginatedRequestParams,
     Prompt,
     ReadResourceResult,
     Resource,
@@ -281,8 +283,7 @@ class MCPClient:
     def list_tools(self) -> list[Tool]:
         """Discover tools exposed by the MCP server."""
         self._ensure_connected()
-        result = self._call(self._session.list_tools)
-        return list(result.tools)
+        return self._list_all(self._session.list_tools, "tools")
 
     def call_tool(self, name: str, arguments: dict[str, Any] | None = None) -> CallToolResult:
         """Call a tool on the server and return its result."""
@@ -292,8 +293,7 @@ class MCPClient:
     def list_resources(self) -> list[Resource]:
         """List resources provided by the MCP server."""
         self._ensure_connected()
-        result = self._call(self._session.list_resources)
-        return list(result.resources)
+        return self._list_all(self._session.list_resources, "resources")
 
     def read_resource(self, uri: str) -> ReadResourceResult:
         """Read a resource by its URI from the MCP server."""
@@ -303,8 +303,7 @@ class MCPClient:
     def list_prompts(self) -> list[Prompt]:
         """List prompts provided by the MCP server."""
         self._ensure_connected()
-        result = self._call(self._session.list_prompts)
-        return list(result.prompts)
+        return self._list_all(self._session.list_prompts, "prompts")
 
     def get_prompt(self, name: str, arguments: dict[str, str] | None = None) -> GetPromptResult:
         """Retrieve a prompt template from the MCP server."""
@@ -387,8 +386,15 @@ class MCPClient:
 
     async def list_tools_async(self) -> list[Tool]:
         self._ensure_connected()
-        result = await self._session.list_tools()
-        return list(result.tools)
+        tools: list[Tool] = []
+        cursor: str | None = None
+        while True:
+            params = PaginatedRequestParams(cursor=cursor) if cursor else None
+            result = await self._session.list_tools(params=params)
+            tools.extend(result.tools)
+            cursor = result.next_cursor
+            if not cursor:
+                return tools
 
     async def call_tool_async(
         self, name: str, arguments: dict[str, Any] | None = None
@@ -399,6 +405,19 @@ class MCPClient:
     def _ensure_connected(self) -> None:
         if not self.is_connected or self._session is None:
             raise MCPConnectionError("MCPClient is not connected. Call connect() first.")
+
+    def _list_all(self, method: Any, field: str) -> list[Any]:
+        """Follow next_cursor so paginating servers return every item, not just page one."""
+        items: list[Any] = []
+        cursor: str | None = None
+        while True:
+            params = PaginatedRequestParams(cursor=cursor) if cursor else None
+            # portal.call() takes no kwargs, hence the partial.
+            result = self._call(functools.partial(method, params=params))
+            items.extend(getattr(result, field))
+            cursor = result.next_cursor
+            if not cursor:
+                return items
 
     def _call(self, func: Any, *args: Any, **kwargs: Any) -> Any:
         if self._portal is None:

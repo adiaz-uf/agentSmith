@@ -12,14 +12,28 @@ from agent_smith.mcp_client.client import MCPClient
 from agent_smith.mcp_client.exceptions import MCPPromptError, MCPResourceError
 
 __all__ = [
+    "DEFAULT_MAX_OUTPUT_CHARS",
     "MCPContextBridge",
     "read_resource_content",
     "render_prompt",
+    "truncate_output",
 ]
 
+# Mirrors SandboxConfig.max_tool_output_chars; mcp_client stays independent of core.
+DEFAULT_MAX_OUTPUT_CHARS = 20_000
 
-def read_resource_content(client: MCPClient, uri: str) -> str:
-    """Read resource by URI and return its text content."""
+
+def truncate_output(text: str, limit: int = DEFAULT_MAX_OUTPUT_CHARS) -> str:
+    """Cap output at limit chars, saying so explicitly so the LLM never mistakes a cut for the whole."""
+    if len(text) <= limit:
+        return text
+    return f"{text[:limit]}\n[output truncated: showing {limit} of {len(text)} characters]"
+
+
+def read_resource_content(
+    client: MCPClient, uri: str, max_chars: int = DEFAULT_MAX_OUTPUT_CHARS
+) -> str:
+    """Read resource by URI and return its text content, truncated to max_chars."""
     try:
         result = client.read_resource(uri)
     except Exception as exc:
@@ -35,7 +49,7 @@ def read_resource_content(client: MCPClient, uri: str) -> str:
                 chunks.append(decoded)
             except (ValueError, UnicodeDecodeError):
                 chunks.append(f"[Binary data: {len(item.blob)} base64 chars]")
-    return "\n".join(chunks)
+    return truncate_output("\n".join(chunks), max_chars)
 
 
 def render_prompt(
@@ -68,8 +82,11 @@ def render_prompt(
 class MCPContextBridge:
     """Ergonomic bridge to query and expose MCP resources and prompts."""
 
-    def __init__(self, client: MCPClient) -> None:
+    def __init__(
+        self, client: MCPClient, *, max_output_chars: int = DEFAULT_MAX_OUTPUT_CHARS
+    ) -> None:
         self._client = client
+        self._max_output_chars = max_output_chars
 
     @property
     def client(self) -> MCPClient:
@@ -84,7 +101,7 @@ class MCPContextBridge:
 
     def read_resource(self, uri: str) -> str:
         """Read a resource by URI and return its text content."""
-        return read_resource_content(self._client, uri)
+        return read_resource_content(self._client, uri, self._max_output_chars)
 
     def list_prompts(self) -> list[Prompt]:
         """List all prompt templates exposed by the MCP server."""

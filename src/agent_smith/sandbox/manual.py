@@ -109,6 +109,7 @@ Your code runs inside an isolated sandbox with the following built-in functions:
 ## Security & Constraints
 - **Execution Timeout**: {cfg.max_execution_time_seconds} seconds per step.
 - **Memory Limit**: {cfg.max_memory_mb} MB.
+- **Tool Output Limit**: {cfg.max_tool_output_chars} characters per tool/resource call; longer output ends with an `[output truncated: ...]` notice.
 - **Allowed Imports**: {allowed_imports}
 - **Allowed Directories**: {allowed_dirs}
 - **Network**: Strict isolation (no inbound or outbound connections).

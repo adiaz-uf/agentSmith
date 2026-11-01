@@ -245,6 +245,12 @@ class SandboxConfig(BaseModel):
         gt=0,
         description="Maximum memory in megabytes for sandbox execution.",
     )
+    max_tool_output_chars: int = Field(
+        default=20_000,
+        gt=0,
+        description="Max characters of MCP tool/resource output returned to the agent; "
+        "longer output is truncated with an explicit notice.",
+    )
 
     @classmethod
     def from_file(cls, path: Path | str) -> SandboxConfig:
