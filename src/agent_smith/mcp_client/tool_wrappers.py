@@ -7,7 +7,7 @@ import inspect
 import keyword
 import logging
 import re
-from collections.abc import Callable, Mapping
+from collections.abc import Callable, Iterable, Mapping
 from typing import Any
 
 from mcp.types import Tool
@@ -22,6 +22,7 @@ __all__ = [
     "create_tool_wrapper",
     "discover_tools",
     "sanitize_identifier",
+    "tool_namespace_names",
 ]
 
 logger = logging.getLogger(__name__)
@@ -138,11 +139,21 @@ def discover_tools(
 
     Tools whose sanitized names collide get underscores appended (``a.b`` / ``a_b`` -> ``a_b_``).
     """
-    wrappers: dict[str, Callable[..., Any]] = {}
-    for t in client.list_tools():
-        name = _unique(sanitize_identifier(t.name), set(wrappers))
-        wrappers[name] = create_tool_wrapper(client, t, unwrap_text=unwrap_text)
-    return wrappers
+    return {
+        name: create_tool_wrapper(client, t, unwrap_text=unwrap_text)
+        for name, t in tool_namespace_names(client.list_tools())
+    }
+
+
+def tool_namespace_names(tools: Iterable[Tool]) -> list[tuple[str, Tool]]:
+    """Pair each tool with the unique Python name it gets in the sandbox namespace."""
+    named: list[tuple[str, Tool]] = []
+    taken: set[str] = set()
+    for t in tools:
+        name = _unique(sanitize_identifier(t.name), taken)
+        taken.add(name)
+        named.append((name, t))
+    return named
 
 
 class ToolRegistry:
