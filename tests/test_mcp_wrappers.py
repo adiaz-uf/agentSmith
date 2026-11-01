@@ -8,7 +8,7 @@ from pathlib import Path
 from typing import Any
 
 import pytest
-from mcp.types import CallToolResult, Tool
+from mcp.types import CallToolResult, TextContent, Tool
 
 from agent_smith.mcp_client import (
     MCPClient,
@@ -18,6 +18,7 @@ from agent_smith.mcp_client import (
     discover_tools,
     sanitize_identifier,
 )
+from agent_smith.mcp_client.exceptions import MCPToolCallError
 
 SERVER_A_CODE = """
 from mcp.server.mcpserver import MCPServer
@@ -74,6 +75,22 @@ class TestIdentifierSanitization:
         assert sanitize_identifier("search-code") == "search_code"
         assert sanitize_identifier("123_calculate") == "tool_123_calculate"
         assert sanitize_identifier("run tests") == "run_tests"
+
+    @pytest.mark.parametrize(
+        ("raw", "expected"),
+        [
+            ("search.code", "search_code"),
+            ("fs/read", "fs_read"),
+            ("ns:tool@v1", "ns_tool_v1"),
+            ("class", "class_"),
+            ("match", "match_"),
+            ("", "tool_"),
+        ],
+    )
+    def test_sanitize_invalid_and_keyword_names(self, raw: str, expected: str):
+        result = sanitize_identifier(raw)
+        assert result == expected
+        assert result.isidentifier()
 
 
 class TestSignatureGeneration:
@@ -210,3 +227,90 @@ class TestToolRegistryAndSandboxNamespace:
         registry.clear_tools()
         assert "multiply" not in ns and "reverse_str" not in ns
         assert "final_answer" in ns and ns["custom"] == 999
+
+
+class FakeClient:
+    """Minimal stand-in for MCPClient that records calls and returns canned results."""
+
+    def __init__(self, tools: list[Tool], result: CallToolResult | None = None) -> None:
+        self.tools = tools
+        self.result = result or CallToolResult(content=[TextContent(type="text", text="ok")])
+        self.calls: list[tuple[str, dict[str, Any]]] = []
+
+    def list_tools(self) -> list[Tool]:
+        return self.tools
+
+    def call_tool(self, name: str, arguments: dict[str, Any]) -> CallToolResult:
+        self.calls.append((name, arguments))
+        return self.result
+
+
+def _tool(name: str, properties: dict[str, Any] | None = None, required: list[str] | None = None):
+    schema: dict[str, Any] = {"type": "object", "properties": properties or {}}
+    if required:
+        schema["required"] = required
+    return Tool(name=name, inputSchema=schema)
+
+
+class TestEdgeCases:
+    def test_optional_args_without_default_are_omitted(self):
+        client = FakeClient([])
+        tool = _tool("q", {"sql": {"type": "string"}, "limit": {"type": "integer"}}, ["sql"])
+        create_tool_wrapper(client, tool)("SELECT 1")  # type: ignore[arg-type]
+        assert client.calls == [("q", {"sql": "SELECT 1"})]
+
+    def test_param_names_are_mapped_back_to_server_names(self):
+        client = FakeClient([])
+        tool = _tool("q", {"from": {"type": "string"}, "max-rows": {"type": "integer"}})
+        wrapper = create_tool_wrapper(client, tool)  # type: ignore[arg-type]
+        assert list(inspect.signature(wrapper).parameters) == ["from_", "max_rows"]
+        wrapper(from_="t", max_rows=3)
+        assert client.calls == [("q", {"from": "t", "max-rows": 3})]
+
+    def test_colliding_param_names_are_disambiguated(self):
+        client = FakeClient([])
+        tool = _tool("q", {"a-b": {"type": "string"}, "a_b": {"type": "string"}})
+        wrapper = create_tool_wrapper(client, tool)  # type: ignore[arg-type]
+        wrapper(a_b="x", a_b_="y")
+        assert client.calls == [("q", {"a-b": "x", "a_b": "y"})]
+
+    def test_colliding_tool_names_are_disambiguated(self):
+        client = FakeClient([_tool("search.code"), _tool("search_code")])
+        wrappers = discover_tools(client)  # type: ignore[arg-type]
+        assert set(wrappers) == {"search_code", "search_code_"}
+        wrappers["search_code_"]()
+        assert client.calls == [("search_code", {})]
+
+    def test_error_result_raises_in_unwrap_mode(self):
+        error = CallToolResult(content=[TextContent(type="text", text="boom")], is_error=True)
+        client = FakeClient([], result=error)
+        wrapper = create_tool_wrapper(client, _tool("t"), unwrap_text=True)  # type: ignore[arg-type]
+        with pytest.raises(MCPToolCallError, match="boom"):
+            wrapper()
+        assert create_tool_wrapper(client, _tool("t"))().is_error  # type: ignore[arg-type]
+
+    def test_registry_does_not_overwrite_final_answer_or_builtins(self):
+        def final_answer(x: Any) -> Any:
+            return x
+
+        ns: dict[str, Any] = {"final_answer": final_answer}
+        client = FakeClient([_tool("final_answer"), _tool("print"), _tool("add")])
+        registry = ToolRegistry(namespace=ns, client=client)  # type: ignore[arg-type]
+        assert ns["final_answer"] is final_answer
+        assert "print" not in ns
+        assert registry.registered_tools == {"add"}
+
+        registry.clear_tools()
+        assert ns == {"final_answer": final_answer}
+
+    def test_failed_discovery_keeps_existing_tools(self):
+        ns: dict[str, Any] = {}
+        registry = ToolRegistry(namespace=ns, client=FakeClient([_tool("add")]))  # type: ignore[arg-type]
+
+        class BrokenClient(FakeClient):
+            def list_tools(self) -> list[Tool]:
+                raise RuntimeError("server down")
+
+        with pytest.raises(RuntimeError):
+            registry.sync_tools(BrokenClient([]))  # type: ignore[arg-type]
+        assert "add" in ns and registry.registered_tools == {"add"}

@@ -2,8 +2,11 @@
 
 from __future__ import annotations
 
+import builtins
 import inspect
+import keyword
 import logging
+import re
 from collections.abc import Callable, Mapping
 from typing import Any
 
@@ -33,34 +36,50 @@ JSON_SCHEMA_TYPE_MAP: dict[str, type] = {
 
 
 def sanitize_identifier(name: str) -> str:
-    """Normalize a tool or parameter name into a valid Python identifier."""
-    cleaned = name.replace("-", "_").replace(" ", "_").strip()
-    return cleaned if cleaned.isidentifier() else f"tool_{cleaned}"
+    """Normalize a tool or parameter name into a valid, non-keyword Python identifier."""
+    cleaned = re.sub(r"\W", "_", name.strip())
+    if not cleaned or not cleaned.isidentifier():
+        cleaned = f"tool_{cleaned}"
+    if keyword.iskeyword(cleaned) or keyword.issoftkeyword(cleaned):
+        cleaned = f"{cleaned}_"
+    return cleaned
 
 
-def create_tool_signature(tool: Tool) -> inspect.Signature:
-    """Generate an inspect.Signature from a Tool's JSON input schema."""
+def _unique(name: str, taken: set[str]) -> str:
+    """Append underscores until name doesn't collide with taken."""
+    while name in taken:
+        name = f"{name}_"
+    return name
+
+
+def _schema_params(tool: Tool) -> list[tuple[str, str, Mapping[str, Any], bool]]:
+    """Return (python_name, server_name, meta, required) per schema property, required first."""
     schema = getattr(tool, "input_schema", None) or getattr(tool, "inputSchema", None) or {}
     properties: Mapping[str, Any] = schema.get("properties", {}) or {}
     required_set = set(schema.get("required", []) or [])
 
-    sorted_props = sorted(properties.keys(), key=lambda p: (p not in required_set, p))
-    parameters: list[inspect.Parameter] = []
+    params: list[tuple[str, str, Mapping[str, Any], bool]] = []
+    taken: set[str] = set()
+    for prop in sorted(properties, key=lambda p: (p not in required_set, p)):
+        py_name = _unique(sanitize_identifier(prop), taken)
+        taken.add(py_name)
+        params.append((py_name, prop, properties[prop] or {}, prop in required_set))
+    return params
 
-    for prop in sorted_props:
-        meta = properties[prop] or {}
-        py_type = JSON_SCHEMA_TYPE_MAP.get(str(meta.get("type", "any")).lower(), Any)
-        default = inspect.Parameter.empty if prop in required_set else meta.get("default", None)
-        parameters.append(
+
+def create_tool_signature(tool: Tool) -> inspect.Signature:
+    """Generate an inspect.Signature from a Tool's JSON input schema."""
+    return inspect.Signature(
+        parameters=[
             inspect.Parameter(
-                name=sanitize_identifier(prop),
+                name=py_name,
                 kind=inspect.Parameter.POSITIONAL_OR_KEYWORD,
-                default=default,
-                annotation=py_type,
+                default=inspect.Parameter.empty if required else meta.get("default", None),
+                annotation=JSON_SCHEMA_TYPE_MAP.get(str(meta.get("type", "any")).lower(), Any),
             )
-        )
-
-    return inspect.Signature(parameters=parameters)
+            for py_name, _, meta, required in _schema_params(tool)
+        ]
+    )
 
 
 def create_tool_wrapper(
@@ -71,9 +90,7 @@ def create_tool_wrapper(
 ) -> Callable[..., Any]:
     """Create a callable Python function that delegates to client.call_tool()."""
     sig = create_tool_signature(tool)
-    schema = getattr(tool, "input_schema", None) or getattr(tool, "inputSchema", None) or {}
-    properties: Mapping[str, Any] = schema.get("properties", {}) or {}
-    name_map = {sanitize_identifier(k): k for k in properties}
+    name_map = {py_name: server_name for py_name, server_name, _, _ in _schema_params(tool)}
 
     def wrapper(*args: Any, **kwargs: Any) -> Any:
         try:
@@ -81,8 +98,8 @@ def create_tool_wrapper(
         except TypeError as exc:
             raise TypeError(f"Invalid call to tool '{tool.name}': {exc}") from exc
 
-        bound.apply_defaults()
-        server_args = {name_map.get(k, k): v for k, v in bound.arguments.items()}
+        # Only forward what the caller passed; the server applies its own defaults.
+        server_args = {name_map[k]: v for k, v in bound.arguments.items()}
         result = client.call_tool(tool.name, server_args)
 
         if not unwrap_text:
@@ -116,11 +133,15 @@ def discover_tools(
     *,
     unwrap_text: bool = False,
 ) -> dict[str, Callable[..., Any]]:
-    """Discover all tools from the MCP server and return callable wrappers."""
-    return {
-        sanitize_identifier(t.name): create_tool_wrapper(client, t, unwrap_text=unwrap_text)
-        for t in client.list_tools()
-    }
+    """Discover all tools from the MCP server and return callable wrappers.
+
+    Tools whose sanitized names collide get underscores appended (``a.b`` / ``a_b`` -> ``a_b_``).
+    """
+    wrappers: dict[str, Callable[..., Any]] = {}
+    for t in client.list_tools():
+        name = _unique(sanitize_identifier(t.name), set(wrappers))
+        wrappers[name] = create_tool_wrapper(client, t, unwrap_text=unwrap_text)
+    return wrappers
 
 
 class ToolRegistry:
@@ -148,13 +169,23 @@ class ToolRegistry:
         return set(self._registered_tools)
 
     def sync_tools(self, client: MCPClient) -> dict[str, Callable[..., Any]]:
-        """Discover tools from client, remove outdated wrappers, and inject new ones."""
-        self.clear_tools()
+        """Discover tools from client, remove outdated wrappers, and inject new ones.
+
+        Discovery runs first, so a failing server leaves the current tools in place.
+        Tools that would shadow a non-MCP namespace entry (e.g. ``final_answer``) or a
+        Python builtin are skipped with a warning.
+        """
         new_tools = discover_tools(client, unwrap_text=self._unwrap_text)
+        self.clear_tools()
+        injected: dict[str, Callable[..., Any]] = {}
         for name, wrapper in new_tools.items():
+            if name in self._namespace or hasattr(builtins, name):
+                logger.warning("Skipping MCP tool %r: name is reserved in the sandbox", name)
+                continue
             self._namespace[name] = wrapper
             self._registered_tools.add(name)
-        return new_tools
+            injected[name] = wrapper
+        return injected
 
     def clear_tools(self) -> None:
         """Remove previously registered MCP tools from namespace."""
