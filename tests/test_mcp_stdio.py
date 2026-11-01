@@ -5,7 +5,9 @@ from __future__ import annotations
 import sys
 from pathlib import Path
 
+import anyio
 import pytest
+from mcp.types import ListToolsResult, Tool
 
 from agent_smith.mcp_client import (
     MCPClient,
@@ -142,3 +144,39 @@ class TestStdioClientProtocol:
             assert any(t.name == "add" for t in await client.list_tools_async())
             res = await client.call_tool_async("add", {"a": 100, "b": 200})
             assert res.content[0].text == "300"
+
+
+class TestPagination:
+    def _paged_client(self) -> tuple[MCPClient, list[str | None]]:
+        """Client wired to a fake session that serves tools in two pages."""
+        pages = {
+            None: ListToolsResult(tools=[Tool(name="a", inputSchema={})], next_cursor="p2"),
+            "p2": ListToolsResult(tools=[Tool(name="b", inputSchema={})]),
+        }
+        seen: list[str | None] = []
+
+        class FakeSession:
+            async def list_tools(self, *, params=None):
+                cursor = params.cursor if params else None
+                seen.append(cursor)
+                return pages[cursor]
+
+        class FakePortal:
+            def call(self, func):
+                return anyio.run(func)
+
+        client = MCPClient.from_stdio([sys.executable, "-c", "pass"])
+        client._session = FakeSession()  # type: ignore[assignment]
+        client._portal = FakePortal()  # type: ignore[assignment]
+        return client, seen
+
+    def test_list_tools_follows_next_cursor(self):
+        client, seen = self._paged_client()
+        assert [t.name for t in client.list_tools()] == ["a", "b"]
+        assert seen == [None, "p2"]
+
+    @pytest.mark.anyio
+    async def test_list_tools_async_follows_next_cursor(self):
+        client, seen = self._paged_client()
+        assert [t.name for t in await client.list_tools_async()] == ["a", "b"]
+        assert seen == [None, "p2"]
