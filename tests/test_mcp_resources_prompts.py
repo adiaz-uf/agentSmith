@@ -76,6 +76,13 @@ class TestMCPResources:
             content = read_resource_content(client, "binary://logo")
             assert "SmithLogoPNG" in content
 
+    def test_read_resource_is_truncated_explicitly(self, context_server_path: Path):
+        with MCPClient.from_stdio([sys.executable, str(context_server_path)]) as client:
+            text = MCPContextBridge(client, max_output_chars=10).read_resource(
+                "docs://architecture"
+            )
+            assert text == "Microkerne\n[output truncated: showing 10 of 51 characters]"
+
     def test_read_nonexistent_resource_raises(self, context_server_path: Path):
         with (
             MCPClient.from_stdio([sys.executable, str(context_server_path)]) as client,

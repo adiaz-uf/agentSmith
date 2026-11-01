@@ -18,7 +18,7 @@ from agent_smith.mcp_client import (
     discover_tools,
     sanitize_identifier,
 )
-from agent_smith.mcp_client.exceptions import MCPToolCallError
+from agent_smith.mcp_client.exceptions import MCPTimeoutError
 
 SERVER_A_CODE = """
 from mcp.server.mcpserver import MCPServer
@@ -281,13 +281,29 @@ class TestEdgeCases:
         wrappers["search_code_"]()
         assert client.calls == [("search_code", {})]
 
-    def test_error_result_raises_in_unwrap_mode(self):
+    def test_error_result_is_observation_in_unwrap_mode(self):
         error = CallToolResult(content=[TextContent(type="text", text="boom")], is_error=True)
         client = FakeClient([], result=error)
         wrapper = create_tool_wrapper(client, _tool("t"), unwrap_text=True)  # type: ignore[arg-type]
-        with pytest.raises(MCPToolCallError, match="boom"):
-            wrapper()
+        assert wrapper() == "Error: tool 't' failed: boom"
         assert create_tool_wrapper(client, _tool("t"))().is_error  # type: ignore[arg-type]
+
+    def test_client_exception_is_observation_in_unwrap_mode(self):
+        class TimingOutClient(FakeClient):
+            def call_tool(self, name: str, arguments: dict[str, Any]) -> CallToolResult:
+                raise MCPTimeoutError("timed out after 30s")
+
+        client = TimingOutClient([])
+        wrapper = create_tool_wrapper(client, _tool("t"), unwrap_text=True)  # type: ignore[arg-type]
+        assert wrapper() == "Error: tool 't' failed: timed out after 30s"
+        with pytest.raises(MCPTimeoutError):
+            create_tool_wrapper(client, _tool("t"))()  # type: ignore[arg-type]
+
+    def test_long_output_is_truncated_explicitly(self):
+        long = CallToolResult(content=[TextContent(type="text", text="abcdefgh")])
+        client = FakeClient([_tool("t")], result=long)
+        registry = ToolRegistry(client=client, unwrap_text=True, max_output_chars=5)  # type: ignore[arg-type]
+        assert registry.namespace["t"]() == "abcde\n[output truncated: showing 5 of 8 characters]"
 
     def test_registry_does_not_overwrite_final_answer_or_builtins(self):
         def final_answer(x: Any) -> Any:

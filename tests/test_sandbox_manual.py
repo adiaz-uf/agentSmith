@@ -109,12 +109,14 @@ class TestSandboxManualGeneration:
             max_memory_mb=1024,
             authorized_imports=["json", "math", "re"],
             allowed_directories=["/testbed", "/tmp/agent"],
+            max_tool_output_chars=5000,
         )
         manual = generate_sandbox_manual(config=cfg)
         assert "60 seconds per step." in manual
         assert "1024 MB." in manual
         assert "json, math, re" in manual
         assert "/testbed, /tmp/agent" in manual
+        assert "5000 characters per tool/resource call" in manual
 
     def test_dynamic_server_switching(self, server_a_path: Path, server_b_path: Path):
         with MCPClient.from_stdio([sys.executable, str(server_a_path)]) as client_a:
