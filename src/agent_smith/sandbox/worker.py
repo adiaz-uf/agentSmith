@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import ast
+import builtins
 import io
 import sys
 import time
@@ -10,6 +11,8 @@ import traceback
 from multiprocessing.connection import Connection
 from typing import Any
 
+from agent_smith.core.models import DEFAULT_AUTHORIZED_IMPORTS
+from agent_smith.sandbox.imports import create_safe_import
 from agent_smith.sandbox.protocol import (
     ExecutionResult,
     decode_ipc_message,
@@ -27,10 +30,18 @@ class SandboxWorker:
 
     def _create_initial_namespace(self) -> dict[str, Any]:
         """Create a fresh execution namespace."""
+        authorized = self.config.get("authorized_imports", DEFAULT_AUTHORIZED_IMPORTS)
+
+        real_builtins = (
+            __builtins__ if isinstance(__builtins__, dict) else builtins.__dict__
+        )
+        safe_builtins = dict(real_builtins)
+        safe_builtins["__import__"] = create_safe_import(authorized)
+
         return {
             "__name__": "__main__",
             "__doc__": None,
-            "__builtins__": __builtins__,
+            "__builtins__": safe_builtins,
         }
 
     def reset_namespace(self) -> None:

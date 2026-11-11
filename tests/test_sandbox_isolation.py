@@ -104,7 +104,8 @@ def test_sandbox_timeout_enforcement() -> None:
 
 def test_sandbox_crash_recovery() -> None:
     """Test that hard process exits (e.g. os._exit) are handled and recovered from."""
-    with ProcessSandbox() as sandbox:
+    config = SandboxConfig(authorized_imports=["os"])
+    with ProcessSandbox(config=config) as sandbox:
         res1 = sandbox.execute("import os\nos._exit(7)")
         assert res1.success is False
         assert res1.terminated is True
@@ -118,7 +119,8 @@ def test_sandbox_crash_recovery() -> None:
 
 def test_sandbox_system_exit_handling() -> None:
     """Test handling of sys.exit() calls without crashing host orchestrator."""
-    with ProcessSandbox() as sandbox:
+    config = SandboxConfig(authorized_imports=["sys"])
+    with ProcessSandbox(config=config) as sandbox:
         res = sandbox.execute("import sys\nsys.exit(42)")
         assert res.success is False
         assert res.terminated is True
