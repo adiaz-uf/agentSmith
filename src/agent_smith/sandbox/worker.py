@@ -5,11 +5,12 @@ from __future__ import annotations
 import ast
 import builtins
 import io
+import json
+import os
 import sys
 import time
 import traceback
-from multiprocessing.connection import Connection
-from typing import Any
+from typing import Any, BinaryIO
 
 from agent_smith.core.models import DEFAULT_AUTHORIZED_IMPORTS
 from agent_smith.sandbox.imports import create_safe_import
@@ -23,19 +24,28 @@ from agent_smith.sandbox.protocol import (
 class SandboxWorker:
     """Worker maintaining state and executing code inside an isolated child process."""
 
-    def __init__(self, connection: Connection, config: dict[str, Any] | None = None) -> None:
-        self.connection = connection
+    def __init__(
+        self,
+        reader: BinaryIO,
+        writer: BinaryIO,
+        config: dict[str, Any] | None = None,
+    ) -> None:
+        self.reader = reader
+        self.writer = writer
         self.config = config or {}
         self.namespace: dict[str, Any] = self._create_initial_namespace()
 
     def _create_initial_namespace(self) -> dict[str, Any]:
-        """Create a fresh execution namespace."""
+        """Create a fresh execution namespace.
+
+        ``__builtins__`` is a per-namespace *copy* of the builtins module dict, so
+        user code doing ``del __builtins__['isinstance']`` neither breaks the
+        worker's own code (json, traceback, run_loop) nor survives a reset.
+        ``__import__`` is replaced with an allowlist-enforcing import.
+        """
         authorized = self.config.get("authorized_imports", DEFAULT_AUTHORIZED_IMPORTS)
 
-        real_builtins = (
-            __builtins__ if isinstance(__builtins__, dict) else builtins.__dict__
-        )
-        safe_builtins = dict(real_builtins)
+        safe_builtins = dict(builtins.__dict__)
         safe_builtins["__import__"] = create_safe_import(authorized)
 
         return {
@@ -113,49 +123,74 @@ class SandboxWorker:
             error=error_msg,
             error_type=error_type,
             execution_time=elapsed,
-            is_timeout=False,
             terminated=terminated,
         )
 
+    def _send(self, message: dict[str, Any]) -> None:
+        self.writer.write(encode_ipc_message(message))
+        self.writer.flush()
+
+    def _send_error(self, message: str) -> None:
+        self._send({"status": "error", "message": message})
+
     def run_loop(self) -> None:
-        """Main IPC loop handling incoming execution commands."""
+        """Main IPC loop handling incoming commands until shutdown or EOF."""
         while True:
             try:
-                payload = self.connection.recv_bytes()
-            except (EOFError, BrokenPipeError, ConnectionResetError):
+                payload = self.reader.readline()
+            except OSError:
+                break
+            if not payload:
                 break
 
             try:
                 message = decode_ipc_message(payload)
-            except Exception as exc:  # noqa: BLE001 (catch all runtime exceptions to return traceback to agent)
-                err_result = ExecutionResult(
-                    error=f"Malformed IPC payload: {exc}",
-                    error_type="IPCError",
-                )
-                self.connection.send_bytes(encode_ipc_message(err_result.to_dict()))
+            except (ValueError, TypeError) as exc:
+                self._send_error(f"Malformed IPC payload: {exc}")
                 continue
 
             cmd = message.get("cmd")
             if cmd == "shutdown":
                 break
-            elif cmd == "reset":
+            if cmd == "reset":
                 self.reset_namespace()
-                self.connection.send_bytes(encode_ipc_message({"status": "ok"}))
+                self._send({"status": "ok"})
             elif cmd == "execute":
-                code = message.get("code", "")
-                result = self.execute_code(code)
-                self.connection.send_bytes(encode_ipc_message(result.to_dict()))
+                result = self.execute_code(message.get("code", ""))
+                self._send({"status": "ok", "result": result.to_dict()})
                 if result.terminated:
                     break
             else:
-                err_result = ExecutionResult(
-                    error=f"Unknown IPC command: {cmd}",
-                    error_type="IPCError",
-                )
-                self.connection.send_bytes(encode_ipc_message(err_result.to_dict()))
+                self._send_error(f"Unknown IPC command: {cmd!r}")
 
 
-def worker_entrypoint(connection: Connection, config: dict[str, Any] | None = None) -> None:
+def _detach_ipc_channel() -> tuple[BinaryIO, BinaryIO]:
+    """Move the host pipes off fds 0/1 and point those fds at /dev/null.
+
+    ``os.dup`` returns non-inheritable descriptors, so grandchildren spawned by
+    user code do not receive the IPC channel either.
+    """
+    ipc_in = os.dup(0)
+    ipc_out = os.dup(1)
+    devnull = os.open(os.devnull, os.O_RDWR)
+    os.dup2(devnull, 0)
+    os.dup2(devnull, 1)
+    os.close(devnull)
+    return os.fdopen(ipc_in, "rb"), os.fdopen(ipc_out, "wb")
+
+
+def main(argv: list[str] | None = None) -> int:
     """Entrypoint executed inside the spawned worker subprocess."""
-    worker = SandboxWorker(connection=connection, config=config)
-    worker.run_loop()
+    args = sys.argv[1:] if argv is None else argv
+    config = json.loads(args[0]) if args else {}
+    reader, writer = _detach_ipc_channel()
+    try:
+        SandboxWorker(reader=reader, writer=writer, config=config).run_loop()
+    finally:
+        reader.close()
+        writer.close()
+    return 0
+
+
+if __name__ == "__main__":
+    raise SystemExit(main())
