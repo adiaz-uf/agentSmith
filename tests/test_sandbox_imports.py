@@ -102,8 +102,8 @@ def test_module_attribute_leaks_are_blocked() -> None:
         assert res1.error_type == "ImportError"
         assert "import of 'os' is not allowed" in (res1.error or "")
 
-        # copy leaks sys as 'sys'
-        res2 = sandbox.execute("from copy import sys")
+        # datetime leaks sys as 'sys'
+        res2 = sandbox.execute("from datetime import sys")
         assert res2.success is False
         assert res2.error_type == "ImportError"
         assert "import of 'sys' is not allowed" in (res2.error or "")
@@ -179,3 +179,99 @@ def test_dynamic_reconfiguration_via_json(tmp_path: Path) -> None:
         assert res2.success is False
         assert res2.error_type == "ImportError"
 
+
+@pytest.mark.parametrize(
+    "code",
+    [
+        "import random\nrandom._os",
+        "import typing\ntyping.sys",
+        "import datetime\ndatetime.sys",
+        "import collections\ncollections._sys",
+        "import json\njson.decoder",
+        "import random\ngetattr(random, '_' + 'os')",
+    ],
+)
+def test_module_attribute_access_leaks_are_blocked(code: str) -> None:
+    """Plain attribute access on an allowed module must not reach non-allowed modules."""
+    with ProcessSandbox() as sandbox:
+        res = sandbox.execute(code)
+        assert res.success is False
+        assert res.error_type == "AttributeError"
+        assert "not allowed" in (res.error or "")
+
+
+def test_string_re_leak_is_blocked() -> None:
+    """string._re is the (allowed) re module, but re's own internals stay guarded."""
+    with ProcessSandbox() as sandbox:
+        res = sandbox.execute("import string\nstring._re.sre_compile")
+        assert res.success is False
+        assert res.error_type == "AttributeError"
+
+
+@pytest.mark.parametrize(
+    "attr",
+    ["__builtins__", "__loader__", "__spec__", "__dict__", "__file__"],
+)
+def test_module_dunder_access_is_blocked(attr: str) -> None:
+    """Module dunders leading back to the real import machinery are not reachable."""
+    with ProcessSandbox() as sandbox:
+        res = sandbox.execute(f"import random\nv = random.{attr}\nv['__import__']('os')")
+        assert res.success is False
+        assert "os" not in (res.return_value or "")
+        assert res.error_type in {"AttributeError", "TypeError", "KeyError"}
+
+
+def test_allowed_submodule_attribute_access_still_works() -> None:
+    """Reaching an authorized module through an attribute keeps working."""
+    with ProcessSandbox() as sandbox:
+        res = sandbox.execute(
+            "import collections, typing\n"
+            "assert collections.abc.Iterable is not None\n"
+            "typing.collections.Counter('aab')"
+        )
+        assert res.success is True, res.error
+        assert res.return_value == "Counter({'a': 2, 'b': 1})"
+
+
+def test_star_import_skips_blocked_modules() -> None:
+    """`from X import *` works for allowed modules without importing leaked ones."""
+    with ProcessSandbox() as sandbox:
+        res = sandbox.execute("from math import *\nfrom datetime import *\nsqrt(16)")
+        assert res.success is True, res.error
+        assert res.return_value == "4.0"
+
+
+def test_dotted_import_does_not_grant_root_package() -> None:
+    """With only 'pkg.*' allowed, `import pkg.sub` binds pkg but exposes only pkg.sub."""
+    config = SandboxConfig(authorized_imports=["collections.*"])
+    with ProcessSandbox(config=config) as sandbox:
+        ok = sandbox.execute("import collections.abc\ncollections.abc.Iterable.__name__")
+        assert ok.success is True, ok.error
+        assert ok.return_value == "'Iterable'"
+
+        for code in ("collections.Counter", "collections._sys", "collections.deque"):
+            res = sandbox.execute(code)
+            assert res.success is False, code
+            assert res.error_type == "AttributeError"
+            assert "not allowed" in (res.error or "")
+
+
+@pytest.mark.parametrize("name", ["__loader__", "__spec__"])
+def test_builtin_loader_is_not_exposed(name: str) -> None:
+    """The BuiltinImporter must not be reachable to load modules like posix."""
+    with ProcessSandbox() as sandbox:
+        res = sandbox.execute(f"{name}")
+        assert res.success is False
+        assert res.error_type == "NameError"
+
+        res = sandbox.execute(f"__builtins__['{name}']")
+        assert res.success is False
+        assert res.error_type == "KeyError"
+
+
+def test_builtin_loader_not_reachable_through_builtin_modules() -> None:
+    """itertools.__loader__ is BuiltinImporter in CPython; it must stay hidden."""
+    with ProcessSandbox() as sandbox:
+        res = sandbox.execute("import itertools\nitertools.__loader__.load_module('posix')")
+        assert res.success is False
+        assert res.error_type == "AttributeError"

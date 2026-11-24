@@ -20,6 +20,9 @@ from agent_smith.sandbox.protocol import (
     encode_ipc_message,
 )
 
+# Builtins entries that give access to the import machinery itself.
+_STRIPPED_BUILTINS = frozenset({"__loader__", "__spec__"})
+
 
 class SandboxWorker:
     """Worker maintaining state and executing code inside an isolated child process."""
@@ -41,11 +44,17 @@ class SandboxWorker:
         ``__builtins__`` is a per-namespace *copy* of the builtins module dict, so
         user code doing ``del __builtins__['isinstance']`` neither breaks the
         worker's own code (json, traceback, run_loop) nor survives a reset.
-        ``__import__`` is replaced with an allowlist-enforcing import.
+        ``__import__`` is replaced with an allowlist-enforcing import, and
+        ``__loader__`` / ``__spec__`` (the ``BuiltinImporter``) are dropped so
+        built-in modules cannot be loaded without going through it.
         """
         authorized = self.config.get("authorized_imports", DEFAULT_AUTHORIZED_IMPORTS)
 
-        safe_builtins = dict(builtins.__dict__)
+        safe_builtins = {
+            name: value
+            for name, value in builtins.__dict__.items()
+            if name not in _STRIPPED_BUILTINS
+        }
         safe_builtins["__import__"] = create_safe_import(authorized)
 
         return {
